@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,10 +10,46 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 )
+
+func TestCTFConversationPreservesProfileThinking(t *testing.T) {
+	s, c := newPersonalBackgroundTestServer(t)
+	var wire map[string]any
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"fixture","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`))
+	}))
+	defer endpoint.Close()
+	id, err := s.m.pg.SaveProfile(&db.LLMProfile{Name: "CTF thinking fixture", Format: "openai", BaseURL: endpoint.URL + "/v1", APIKey: "fixture-key", Model: "fixture-model", ThinkingType: "enabled", ReasoningEffort: "high", Streaming: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.AgentKey, c.LLMProfileID = "solver", &id
+	chat := s.personalChatAgent(c)
+	if chat == nil {
+		t.Fatal("missing CTF chat agent")
+	}
+	if _, err := chat.Chat(context.Background(), "solver", s.convBusyKey(c.ID), "Analyze local CTF evidence", 0, 10*time.Second, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if wire["reasoning_effort"] != "high" {
+		t.Fatalf("profile reasoning effort lost: %v", wire)
+	}
+	thinking, _ := wire["thinking"].(map[string]any)
+	if thinking["type"] != "enabled" {
+		t.Fatalf("profile thinking switch lost: %v", wire)
+	}
+	if got := s.personalConversationView(c).EffectiveReasoningEffort; got != "high" {
+		t.Fatalf("effective effort = %q", got)
+	}
+}
 
 func TestPersonalReasoningCandidates(t *testing.T) {
 	for _, tc := range []struct {

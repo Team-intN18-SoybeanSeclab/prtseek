@@ -117,6 +117,264 @@
   padding: 12px 24px;
 }
 
+.chatSplit {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+.chatSplit[data-ops="true"] {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+}
+.chatMain {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.missionBar {
+  display: flex;
+  min-height: 42px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--chat-signal) 9%, var(--background)), var(--background) 62%);
+  padding: 8px 24px;
+}
+.missionEyebrow {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  letter-spacing: 0.13em;
+}
+.missionRole {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.missionRun {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.missionRun[data-live="true"] {
+  color: var(--chat-signal);
+}
+.operationsRail {
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--chat-signal) 6%, var(--background)), color-mix(in srgb, var(--muted) 35%, var(--background)) 240px);
+}
+.operationsRail .delegationConsole {
+  min-height: 100%;
+  border: 0;
+  border-top: 2px solid var(--chat-signal);
+}
+
+.delegationConsole {
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--chat-signal);
+  background: transparent;
+}
+.delegationHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 16px 16px 14px;
+  background: color-mix(in srgb, var(--background) 72%, transparent);
+}
+.delegationHeading > div {
+  display: grid;
+  gap: 2px;
+}
+.delegationHeading strong {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.delegationCode,
+.delegationCount {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  letter-spacing: 0.13em;
+}
+.delegationCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  padding: 5px 7px;
+  white-space: nowrap;
+}
+.delegationCount[data-live="true"] {
+  border-color: color-mix(in srgb, var(--chat-signal) 48%, var(--border));
+  color: var(--chat-signal);
+}
+.delegationCountDot {
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+}
+.delegationGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+}
+.delegationCard {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 94%, var(--background));
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.delegationCard[open] {
+  border-color: color-mix(in srgb, var(--chat-signal) 36%, var(--border));
+}
+.delegationCard summary {
+  display: flex;
+  min-height: 39px;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+.delegationCard summary::-webkit-details-marker {
+  display: none;
+}
+.delegationCard summary:hover {
+  background: color-mix(in srgb, var(--chat-signal) 7%, transparent);
+}
+.delegationAgent {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegationState {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.delegationState[data-live="true"] {
+  color: var(--chat-signal);
+}
+.delegationMark,
+.delegationPulse,
+.delegationEventDot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  background: var(--muted-foreground);
+}
+.delegationPulse {
+  background: var(--chat-signal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-signal) 20%, transparent);
+  animation: delegationPulse 1.4s ease-in-out infinite;
+}
+.delegationChevron {
+  transition: transform 120ms ease;
+}
+.delegationCard[open] .delegationChevron {
+  transform: rotate(90deg);
+}
+.delegationBody {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+}
+.delegationTaskMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--chat-signal);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+.delegationTitle {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 8px 0 12px;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.delegationActivity {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border-left: 1px solid var(--border);
+  padding: 0 0 0 10px;
+  list-style: none;
+}
+.delegationActivity li {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding: 7px 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.delegationActivity li[data-error="true"] {
+  color: var(--destructive);
+}
+.delegationActivity li > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegationActivity li:last-child {
+  border-bottom: 0;
+}
+.delegationEventDot {
+  width: 4px;
+  height: 4px;
+  margin: 5px 1px;
+  background: var(--chat-signal);
+}
+.delegationEmpty {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.delegationLink {
+  display: inline-flex;
+  margin-top: 13px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  color: var(--chat-signal);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.delegationLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@keyframes delegationPulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
 .sessionHeading {
   min-width: 0;
   flex: 1;
@@ -271,11 +529,24 @@
   align-items: flex-end;
   gap: 8px;
   border: 1px solid var(--border);
-  background: var(--background);
+  background: color-mix(in srgb, var(--card) 92%, var(--background));
   padding: 8px;
+  box-shadow: 0 5px 20px color-mix(in srgb, var(--foreground) 5%, transparent);
 }
 .composerInput:focus-within {
-  border-color: var(--foreground);
+  border-color: var(--chat-signal);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chat-signal) 38%, transparent);
+}
+.composerInput[data-dragging="true"] {
+  border-color: var(--chat-signal);
+  background: color-mix(in srgb, var(--chat-signal) 9%, var(--background));
+  box-shadow: inset 0 0 0 1px var(--chat-signal);
+}
+.interruptHint {
+  margin: 8px 4px 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.5;
 }
 .composerInput textarea {
   min-height: 46px;
@@ -660,7 +931,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .progressSignal {
+  .progressSignal,
+  .delegationPulse {
     animation: none;
   }
 }
@@ -685,6 +957,26 @@
     min-height: 48px;
     gap: 7px;
     padding: 9px 14px;
+  }
+  .delegationHeading {
+    padding: 8px 10px;
+  }
+  .delegationGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chatSplit[data-ops="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .operationsRail {
+    max-height: 42dvh;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+  .missionBar {
+    padding: 8px 14px;
+  }
+  .delegationCard {
+    border-right: 0;
   }
   .telemetry {
     width: 100%;

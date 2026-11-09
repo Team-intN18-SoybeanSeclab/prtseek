@@ -228,9 +228,9 @@ func (s *Server) pgListAgents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	visible := make([]*db.Agent, 0, 5)
+	visible := make([]*db.Agent, 0, len(defaultCTFAgents))
 	for _, a := range ags {
-		if !pg.AgentArchived(a.Key) && (db.IsCoreAgent(a.Key) || !a.Builtin) {
+		if !pg.AgentArchived(a.Key) && isDefaultCTFAgent(a.Key) {
 			visible = append(visible, a)
 		}
 	}
@@ -249,6 +249,9 @@ func (s *Server) pgListAgents(w http.ResponseWriter, r *http.Request) {
 
 // pgCreateAgent creates a custom agent or restores an archived key.
 func (s *Server) pgCreateAgent(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, http.StatusForbidden, "自定义 Agent 已禁用；仅保留默认 CTF 编组")
+	return
+
 	pg := s.pg(w)
 	if pg == nil {
 		return
@@ -320,6 +323,9 @@ func (s *Server) pgUpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 // Deletion hides and disables an agent while retaining historical references.
 func (s *Server) pgDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, http.StatusForbidden, "默认 CTF Agent 不可删除")
+	return
+
 	pg, a, ok := s.agentByKey(w, r)
 	if !ok {
 		return
@@ -378,7 +384,7 @@ func (s *Server) agentByKey(w http.ResponseWriter, r *http.Request) (*db.DB, *db
 		writeErr(w, 500, err.Error())
 		return nil, nil, false
 	}
-	if a == nil || pg.AgentArchived(a.Key) || (a.Builtin && !db.IsCoreAgent(a.Key)) {
+	if a == nil || pg.AgentArchived(a.Key) || !isDefaultCTFAgent(a.Key) {
 		writeErr(w, 404, "agent not found")
 		return nil, nil, false
 	}

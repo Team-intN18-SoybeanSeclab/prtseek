@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,6 +20,46 @@ func hasSkillTool(tools []actool.CoreTool) bool {
 		}
 	}
 	return false
+}
+
+func TestCTFHostToolProfile(t *testing.T) {
+	custom := map[string]bool{"ctf_decoder": true}
+	for _, name := range []string{"ctf_decoder", "traffic_search", "traffic_get", "traffic_blob"} {
+		if !ctfHostToolAllowed(name, custom) {
+			t.Errorf("useful CTF tool %s was dropped", name)
+		}
+	}
+	for _, name := range []string{"list_tasks", "spawn_task", "create_mcp", "delete_assets_by_host", "list_findings"} {
+		if ctfHostToolAllowed(name, custom) {
+			t.Errorf("legacy control tool %s leaked into CTF", name)
+		}
+	}
+}
+
+func TestCTFAugmentDropsLegacyHostControlTools(t *testing.T) {
+	s, _ := newPersonalBackgroundTestServer(t)
+	if err := s.initAgentWorkflows(); err != nil {
+		t.Fatal(err)
+	}
+	old := agent.ToolAugment
+	t.Cleanup(func() { agent.ToolAugment = old })
+	fake := func(name string) actool.CoreTool {
+		return wrTool(name, name, objSchema(map[string]any{}), func(context.Context, json.RawMessage) (actool.Result, error) {
+			return actool.Text("fixture"), nil
+		})
+	}
+	wireAgentAugment(s.m.pg, t.TempDir(), func() ([]actool.CoreTool, map[string][]string) {
+		return []actool.CoreTool{fake("spawn_task"), fake("create_mcp"), fake("traffic_get")}, nil
+	})
+	extra, _, cleanup := agent.ToolAugment(t.Context(), "triage")
+	defer cleanup()
+	names := map[string]bool{}
+	for _, tool := range extra {
+		names[tool.Name()] = true
+	}
+	if names["spawn_task"] || names["create_mcp"] || !names["traffic_get"] {
+		t.Fatalf("unexpected CTF host tools: %v", names)
+	}
 }
 
 // TestAssembleVisibleSkill verifies a filesystem skill made visible to an agent is

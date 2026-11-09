@@ -40,7 +40,8 @@ import { cn } from "@/lib/utils";
 
 // Traffic tools are host tools gated by the global 流量捕获 switch: bindable, but
 // only usable when capture is on. Keep this list in sync with traffic.SeedToolMetas.
-const TRAFFIC_TOOL_KEYS = new Set(["traffic_search", "traffic_get"]);
+const TRAFFIC_TOOL_KEYS = new Set(["traffic_search", "traffic_get", "traffic_blob"]);
+const CTF_AGENT_KEYS = new Set(["triage", "command", "solver", "writeup"]);
 
 // AgentEditor is the tabbed editor for one agent, used inside the agents-page
 // drawer (and reused full-page for deep links). Tabs: 配置与提示词 / MCP / Skill /
@@ -291,6 +292,9 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
   const showLLM = true;
   // triggers (P3) only attach to custom agents.
   const isCustom = !!detail && !detail.agent?.builtin;
+  const ctfTools = CTF_AGENT_KEYS.has(agentKey)
+    ? tools.filter((tool) => !tool.system || TRAFFIC_TOOL_KEYS.has(tool.key))
+    : tools;
 
   return (
     <Tabs defaultValue="prompt" className="flex min-h-0 flex-1 flex-col">
@@ -750,9 +754,13 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
 
       {/* Tools 绑定 */}
       <TabsContent value="tools" className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-        <p className="text-muted-foreground mb-3 text-xs">勾选绑定给此 Agent 的内置工具。</p>
+        <p className="text-muted-foreground mb-3 text-xs">
+          {CTF_AGENT_KEYS.has(agentKey)
+            ? "文件、命令、证据记录与子 Agent 协作工具自动提供；此处仅显示可选的自定义与流量工具。"
+            : "勾选绑定给此 Agent 的内置工具。"}
+        </p>
         <div className="grid gap-2">
-          {tools.map((t) => {
+          {ctfTools.map((t) => {
             const isTraffic = TRAFFIC_TOOL_KEYS.has(t.key);
             const gated = isTraffic && !captureOn; // traffic tools need 流量捕获 on
             return (
@@ -788,7 +796,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
               </label>
             );
           })}
-          {tools.length === 0 && <span className="text-muted-foreground text-xs">（暂无工具）</span>}
+          {ctfTools.length === 0 && <span className="text-muted-foreground text-xs">（暂无可选工具）</span>}
         </div>
       </TabsContent>
 

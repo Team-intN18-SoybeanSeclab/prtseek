@@ -192,8 +192,9 @@ func (s *Server) personalModelCapabilities(w http.ResponseWriter, r *http.Reques
 			writeErr(w, 400, "无效的思考强度")
 			return
 		}
-		cfg.ReasoningEffort = effort
-		cfg.ThinkingType = ""
+		if effort != "" {
+			cfg.ReasoningEffort = effort
+		}
 		if _, _, err := agent.TestConnection(r.Context(), cfg); err != nil {
 			writeErr(w, 400, "该模型配置未通过此强度的请求验证："+redactPersonalError(err, cfg.APIKey))
 			return
@@ -281,7 +282,11 @@ type personalConversationView struct {
 func (s *Server) personalConversationView(c *db.Conversation) personalConversationView {
 	p := s.personalConversationSettings(c.ID)
 	cfg, id, _ := s.personalProfileConfig(c)
-	return personalConversationView{Conversation: c, Mode: workflowMode(c.AgentKey), ReasoningEffort: p.ReasoningEffort, ResponseLanguage: p.ResponseLanguage, EffectiveModel: cfg.Model, EffectiveProfileID: id, EffectiveReasoningEffort: p.ReasoningEffort}
+	effort := p.ReasoningEffort
+	if effort == "" {
+		effort = cfg.ReasoningEffort
+	}
+	return personalConversationView{Conversation: c, Mode: workflowMode(c.AgentKey), ReasoningEffort: p.ReasoningEffort, ResponseLanguage: p.ResponseLanguage, EffectiveModel: cfg.Model, EffectiveProfileID: id, EffectiveReasoningEffort: effort}
 }
 
 func (s *Server) personalChatAgent(c *db.Conversation) *agent.ChatAgent {
@@ -290,13 +295,14 @@ func (s *Server) personalChatAgent(c *db.Conversation) *agent.ChatAgent {
 		return nil
 	}
 	settings := s.personalConversationSettings(c.ID)
-	cfg.ReasoningEffort = settings.ReasoningEffort
-	cfg.ThinkingType = ""
+	if settings.ReasoningEffort != "" {
+		cfg.ReasoningEffort = settings.ReasoningEffort
+	}
 	prov, err := cfg.NewProviderWithLimiter(s.requestLimiterForProfile(id))
 	if err != nil {
 		return nil
 	}
-	prov = llmrec.Wrap(prov, s.m.Database(), cfg.Model, "personal", "", cfg.ReasoningEffort, s.m.LLMRecordEnabled)
+	prov = llmrec.Wrap(prov, s.m.Database(), cfg.Model, "personal", cfg.ThinkingType, cfg.ReasoningEffort, s.m.LLMRecordEnabled)
 	ca := agent.NewChatAgent(prov, cfg.Model, s.m.dir, transcript.NewStore(filepath.Join(s.m.dir, "transcripts")), cfg.CompactionWindow())
 	ca.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	ca.SetWebSearch(s.m.WebSearchOpts())
@@ -344,6 +350,7 @@ type personalRunSnapshot struct {
 	BaseURL           string            `json:"base_url"`
 	Format            string            `json:"format"`
 	ReasoningEffort   string            `json:"reasoning_effort"`
+	ThinkingType      string            `json:"thinking_type,omitempty"`
 	ResponseLanguage  string            `json:"response_language"`
 	Streaming         bool              `json:"streaming"`
 	ContextWindowK    int               `json:"context_window_k"`
@@ -362,7 +369,10 @@ func personalCredentialBinding(cfg agent.Config) string {
 }
 
 func makePersonalRunSnapshot(cfg agent.Config, id int64, effort, language string) personalRunSnapshot {
-	return personalRunSnapshot{ProfileID: id, Model: cfg.Model, BaseURL: cfg.BaseURL, Format: string(cfg.Format), ReasoningEffort: effort, ResponseLanguage: language, Streaming: cfg.Stream, ContextWindowK: cfg.ContextWindowK, MaxTokens: cfg.MaxTokens, MaxTokensField: cfg.MaxTokensField, CredentialBinding: personalCredentialBinding(cfg), RatePerSecond: cfg.RatePerSecond, RatePerMinute: cfg.RatePerMinute, Retry: cfg.Retry, Version: 2}
+	if effort == "" {
+		effort = cfg.ReasoningEffort
+	}
+	return personalRunSnapshot{ProfileID: id, Model: cfg.Model, BaseURL: cfg.BaseURL, Format: string(cfg.Format), ReasoningEffort: effort, ThinkingType: cfg.ThinkingType, ResponseLanguage: language, Streaming: cfg.Stream, ContextWindowK: cfg.ContextWindowK, MaxTokens: cfg.MaxTokens, MaxTokensField: cfg.MaxTokensField, CredentialBinding: personalCredentialBinding(cfg), RatePerSecond: cfg.RatePerSecond, RatePerMinute: cfg.RatePerMinute, Retry: cfg.Retry, Version: 3}
 }
 
 func (s *Server) personalBackgroundSnapshot(c *db.Conversation) (json.RawMessage, error) {
@@ -418,7 +428,11 @@ func (s *Server) personalTaskConfig(taskID string) (agent.Config, bool, error) {
 	cfg.BaseURL = snap.BaseURL
 	cfg.Format = llm.Format(snap.Format)
 	cfg.ReasoningEffort = snap.ReasoningEffort
-	cfg.ThinkingType = ""
+	if snap.Version >= 3 {
+		cfg.ThinkingType = snap.ThinkingType
+	} else {
+		cfg.ThinkingType = ""
+	}
 	cfg.Stream = snap.Streaming
 	cfg.ContextWindowK = snap.ContextWindowK
 	cfg.MaxTokens = snap.MaxTokens

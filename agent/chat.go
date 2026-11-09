@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
@@ -93,19 +92,23 @@ func chatWorkDirSpec(workDir string) string {
 // no per-key in-code default, so DefaultAssistantPrompt is the render fallback.
 func chatSystem(agentKey, dataDir, workDir string) string {
 	prompt := renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()})
-	if agentKey == "ctf_triage" {
-		prompt += "\n\n协作约定：材料足够时必须调用 delegate_agent 将结构化材料清单交给 ctf_planner；缺少题目或附件时先明确请求补充，不自行完成整个解题流程。不能只用文字声称已经分工。"
+	if agentKey == "triage" {
+		prompt += "\n\n协作约定：材料足够时应调用 delegate_agent 将结构化材料清单交给 command；缺少题目或附件时先明确请求补充，不能只用文字声称已经分工。"
 	}
-	if agentKey == "ctf_planner" {
-		prompt += "\n\n协作约定：使用 delegate_agents 一次派发 2 至 6 个独立 ctf_worker 子任务。至少区分主线分析与独立证据复核，避免重复工作；给出材料、目标、边界、产物路径和验收标准。等待真实返回，区分失败、取消和完成，再汇总结论。后续根据缺口派发新的批次；不要把独立复核省略成自己检查。完成后使用 delegate_agent 交给 ctf_writeup 整理，不能假称未实际发生的派发。"
+	if agentKey == "command" {
+		prompt += "\n\n协作约定：使用 delegate_agents 一次派发 2 至 6 个独立 solver 子任务。至少区分主线分析与独立证据复核，避免重复工作；给出材料、目标、边界、产物路径和验收标准。等待真实返回，区分失败、取消和完成，再汇总结论。收敛后把可复现结论交给 writeup；不能假称未实际发生的派发。"
 	}
-	if agentKey == "planner" || agentKey == "mainagent" {
-		prompt += "\n\n" + CoordinatorPrompt
-	}
-	if strings.HasPrefix(agentKey, "ctf_") {
-		prompt += "\n\n" + CTFEvidencePriority
+	if agentKey == "triage" || agentKey == "command" || agentKey == "solver" || agentKey == "writeup" {
+		prompt += "\n\n" + CTFEvidencePriority + "\n\n" + ctfRoleMethod(agentKey)
 	}
 	return prompt + chatWorkDirSpec(workDir)
+}
+
+func chatTodos(ctf bool) *actool.TodoStore {
+	if ctf {
+		return nil
+	}
+	return actool.NewTodoStore()
 }
 
 // chatVars carries the runtime variables a custom agent's prompt may reference.
@@ -146,7 +149,13 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// Pure assistant: DefaultTools as the base; AugmentTools layers in the key's
 	// visible skills/MCP and lets the DB tools table filter/override. DefaultTools
 	// have no tools-table rows, so they always pass through.
+	ctf := ctfRoleMethod(agentKey) != ""
 	base := actool.DefaultTools()
+	if ctf {
+		// Delegation, not SDK background tasks, owns CTF parallelism. Sleep and
+		// TodoWrite add competing control paths without helping solve a challenge.
+		base = defaultToolsExcept("Sleep")
+	}
 	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID})
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
@@ -163,7 +172,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		DeferredTools:          def.Deferred,
 		UnlockSet:              def.Unlock,
 		PermissionMode:         permission.ModeBypass,
-		DisableBackgroundTasks: agentKey == "personal",
+		DisableBackgroundTasks: agentKey == "personal" || ctf,
 		EnableWebFetch:         true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
 		WebFetchProxy:          c.proxyAddr,
 		WebFetchCACert:         c.proxyCACert,
@@ -182,7 +191,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		MaxTurns:              maxTurns,
 		MaxDuration:           maxDuration,
 		Compaction:            compactionConfig(c.window),
-		Todos:                 actool.NewTodoStore(),
+		Todos:                 chatTodos(ctf),
 		// large tool output spills to cmd-output/ under the session dir.
 		// 截断上限用 SDK 默认(tool.Capture 的 30000 字符)。
 		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
@@ -205,6 +214,10 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
 	enableNoa(&opts, c.noaEnabledFn, c.workDir, "chat-"+sessionID, noaWarn("chat-"+sessionID))
 	ctx = attachSideCapture(ctx, &opts)
+	if agentKey == "triage" || agentKey == "command" || agentKey == "solver" || agentKey == "writeup" {
+		ctx = WithResearchOptimization(ctx, true)
+		ctx = withoutResearchGuide(ctx)
+	}
 	if err := AttachResearchRuntime(ctx, &opts, c.model, sessionWorkDir, message); err != nil {
 		return "", err
 	}

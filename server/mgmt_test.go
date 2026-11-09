@@ -47,53 +47,41 @@ func TestMgmtAPI(t *testing.T) {
 		t.Fatalf("GET agents: %d", code)
 	}
 	ags, _ := out["agents"].([]any)
-	want := map[string]bool{"goals": true, "planner": true, "mainagent": true, "worker": true, "reporter": true, "ctf_triage": true, "ctf_planner": true, "ctf_worker": true, "ctf_writeup": true}
+	want := map[string]bool{"triage": true, "command": true, "solver": true, "writeup": true}
 	for _, raw := range ags {
 		delete(want, raw.(map[string]any)["key"].(string))
 	}
 	if len(want) > 0 {
 		t.Fatalf("missing roles: %v", want)
 	}
-	for _, step := range []struct {
-		method, path string
-		body         any
-		status       int
-	}{
-		{"POST", "/api/agents", map[string]string{"key": "crud_test_role", "name": "Test", "prompt": "Keep this prompt"}, 201},
-		{"PATCH", "/api/agents/crud_test_role", map[string]string{"name": "Edited"}, 200},
-		{"DELETE", "/api/agents/crud_test_role", nil, 200},
-		{"GET", "/api/agents/crud_test_role", nil, 404},
-		{"POST", "/api/agents", map[string]string{"key": "crud_test_role", "name": "Restored"}, 201},
-		{"GET", "/api/agents/crud_test_role", nil, 200},
-	} {
-		if code, out := do(step.method, step.path, step.body); code != step.status {
-			t.Fatalf("%s %s: %d %v", step.method, step.path, code, out)
-		}
+	if code, out := do("POST", "/api/agents", map[string]string{"key": "custom_role", "name": "Custom"}); code != 403 {
+		t.Fatalf("custom agent creation should be disabled: %d %v", code, out)
 	}
-	for _, body := range []map[string]string{{"agent_key": "worker"}, {"mode": "ctf", "agent_key": "ctf_worker"}} {
-		if code, _ := do("POST", "/api/conversations", body); code != 400 {
-			t.Fatalf("invalid entry accepted: %d", code)
+	for _, body := range []map[string]string{{"agent_key": "triage"}, {"mode": "ctf", "agent_key": "command"}} {
+		code, out := do("POST", "/api/conversations", body)
+		if code != 200 || out["agent_key"] != body["agent_key"] || out["mode"] != "ctf" {
+			t.Fatalf("CTF agent selection failed: %d %#v", code, out)
 		}
 	}
 
 	// invalid template var → 400 (catalog whitelist)
-	code, out = do("PUT", "/api/agents/planner/prompt", map[string]string{"template": "hi {{.Nope}}"})
+	code, out = do("PUT", "/api/agents/command/prompt", map[string]string{"template": "hi {{.Nope}}"})
 	if code != 400 {
 		t.Fatalf("bad var should be 400, got %d (%v)", code, out)
 	}
 
 	// valid template using seeded catalog vars → 200
-	code, _ = do("PUT", "/api/agents/planner/prompt", map[string]string{"template": "你是规划者，目标：{{.Goal}}，摘要 {{.AssetSummary}}"})
+	code, _ = do("PUT", "/api/agents/command/prompt", map[string]string{"template": "工作区：{{.DataDir}}，时间 {{.Now}}"})
 	if code != 200 {
 		t.Fatalf("valid prompt save: %d", code)
 	}
 
 	// preview renders with catalog examples
-	code, out = do("POST", "/api/agents/planner/prompt/preview", map[string]any{})
+	code, out = do("POST", "/api/agents/command/prompt/preview", map[string]any{})
 	if code != 200 {
 		t.Fatalf("preview: %d", code)
 	}
-	if rendered, _ := out["rendered"].(string); rendered == "" || rendered == "你是规划者，目标：{{.Goal}}，摘要 {{.AssetSummary}}" {
+	if rendered, _ := out["rendered"].(string); rendered == "" || rendered == "工作区：{{.DataDir}}，时间 {{.Now}}" {
 		t.Fatalf("preview did not substitute: %q", out["rendered"])
 	}
 
@@ -106,8 +94,8 @@ func TestMgmtAPI(t *testing.T) {
 	}
 	mid := int64(out["id"].(float64))
 
-	ag, _ := m.pg.GetAgentByKey("planner")
-	code, _ = do("PUT", "/api/agents/planner/visibility", map[string]any{"mcp": []int64{mid}, "skill": []int64{}})
+	ag, _ := m.pg.GetAgentByKey("command")
+	code, _ = do("PUT", "/api/agents/command/visibility", map[string]any{"mcp": []int64{mid}, "skill": []int64{}})
 	if code != 200 {
 		t.Fatalf("set visibility: %d", code)
 	}

@@ -114,17 +114,14 @@ func (s *Server) pgCreateConversation(w http.ResponseWriter, r *http.Request) {
 	if !decodeConversationRequest(w, r, &req) {
 		return
 	}
-	req.AgentKey = strings.TrimSpace(req.AgentKey)
-	if req.Mode == "" {
-		req.Mode = "standard"
-	}
-	{
-		key, err := workflowEntry(req.Mode, req.AgentKey)
-		if err != nil {
-			writeErr(w, 400, err.Error())
-			return
-		}
-		req.AgentKey = key
+	// There is no mode switch: all conversations are CTF operations, while the
+	// selected enabled agent defines the operator-designed collaboration graph.
+	req.Mode = "ctf"
+	var entryErr error
+	req.AgentKey, entryErr = workflowEntry(req.Mode, req.AgentKey)
+	if entryErr != nil {
+		writeErr(w, 400, entryErr.Error())
+		return
 	}
 	if req.AgentKey == "" {
 		writeErr(w, 400, "agent_key 不能为空")
@@ -508,6 +505,7 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Message     string           `json:"message"`
 		Attachments []chatAttachment `json:"attachments,omitempty"` // 方式1 上传的文件(路径相对会话工作目录)
+		Interrupt   bool             `json:"interrupt,omitempty"`
 	}
 	if err := decode(r, &req); err != nil {
 		writeErr(w, 400, err.Error())
@@ -536,14 +534,10 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	}
 
 	busyKey := s.convBusyKey(c.ID)
-	s.chatMu.Lock()
-	if s.chatBusy[busyKey] {
-		s.chatMu.Unlock()
-		writeErr(w, 409, "该会话正在处理上一条消息，请稍候")
+	if err := s.reserveConversationTurn(r.Context(), busyKey, req.Interrupt); err != nil {
+		writeErr(w, 409, err.Error())
 		return
 	}
-	s.chatBusy[busyKey] = true
-	s.chatMu.Unlock()
 
 	// persist + float the human turn; auto-title the thread from the first message.
 	// Worker is the agent key (not "user") so the transcript stays a single lane
@@ -575,6 +569,41 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	baseDir := filepath.Join(s.m.dir, "sessions", busyKey)
 	s.runConversation(c, composeAgentMessage(agentMessage, req.Attachments, baseDir), busyKey, msg)
 	writeJSON(w, 202, map[string]any{"status": "accepted"})
+}
+
+// reserveConversationTurn serializes an interrupting user message with the
+// previous agent turn. Cancellation alone is not enough: the old turn must
+// release its busy slot before a new transcript writer may start.
+func (s *Server) reserveConversationTurn(ctx context.Context, busyKey string, interrupt bool) error {
+	var ticker *time.Ticker
+	if interrupt {
+		ticker = time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	}
+	for {
+		s.chatMu.Lock()
+		if !s.chatBusy[busyKey] {
+			s.chatBusy[busyKey] = true
+			s.chatMu.Unlock()
+			return nil
+		}
+		stop := s.chatCancel[busyKey]
+		s.chatMu.Unlock()
+		if !interrupt {
+			return errors.New("该会话正在处理上一条消息，请稍候")
+		}
+		if stop != nil {
+			stop(agent.AbortChatStoppedByUser)
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("上一轮仍在停止中，请稍后重试；新消息尚未发送")
+		case <-ticker.C:
+		}
+	}
 }
 
 // runConversation runs ONE agent turn on a conversation in a background goroutine

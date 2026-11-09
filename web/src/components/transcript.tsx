@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { api } from "@/lib/api";
+import { hideResearchEvidenceAnnotation } from "@/lib/research-evidence";
 import type { Activity, InterceptPending } from "@/lib/types";
 
 import styles from "./chat-workspace.module.css";
@@ -687,15 +688,24 @@ function ExecView({
   focusedSeq?: number;
 }) {
   const showWorker = new Set(activity.map((a) => a.worker)).size > 1;
+  const visibleActivity = React.useMemo(
+    () => activity.map((step) => ({
+      ...step,
+      summary: hideResearchEvidenceAnnotation(step.summary),
+      detail: step.detail ? hideResearchEvidenceAnnotation(step.detail) : step.detail,
+    })),
+    [activity],
+  );
   // default detail fetcher: the task-scoped activity endpoint. The chat page passes
   // its own (conversation-scoped) fetcher instead.
   const getDetail = React.useCallback(
-    (seq: number) => (fetchDetail ? fetchDetail(seq) : api.activityDetail(seq, taskId).then((r) => r.detail ?? "")),
+    (seq: number) => (fetchDetail ? fetchDetail(seq) : api.activityDetail(seq, taskId).then((r) => r.detail ?? ""))
+      .then(hideResearchEvidenceAnnotation),
     [fetchDetail, taskId],
   );
   return (
     <div className="flex flex-col">
-      {groupSteps(activity, !!chat).map((g) =>
+      {groupSteps(visibleActivity, !!chat).map((g) =>
         g.type === "round" ? (
           <div key={"r" + g.key} className="my-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <span className="h-px flex-1 bg-border" />

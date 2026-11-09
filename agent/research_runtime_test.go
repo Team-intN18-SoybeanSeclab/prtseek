@@ -88,6 +88,28 @@ func TestResearchRuntimeActivation(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".research")); !os.IsNotExist(err) {
 		t.Fatal("attach wrote state before a tool ran")
 	}
+	for _, model := range []string{"gpt-5-fixture", "claude-sonnet-fixture", "deepseek-flash"} {
+		t.Run("ctf/"+model, func(t *testing.T) {
+			ctf := agentcore.Options{SystemPrompt: []string{"original"}}
+			ctx := withoutResearchGuide(WithResearchOptimization(t.Context(), true))
+			if err := AttachResearchRuntime(ctx, &ctf, model, t.TempDir(), "inspect challenge"); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := ctf.Hooks.(*researchRuntime); !ok {
+				t.Fatal("CTF research hooks missing")
+			}
+			found := false
+			for _, tool := range ctf.Tools {
+				found = found || tool.Name() == "research_recall"
+				if tool.Name() == "research_guide" {
+					t.Fatal("generic research guide leaked into CTF toolset")
+				}
+			}
+			if !found {
+				t.Fatal("CTF research tools missing")
+			}
+		})
+	}
 }
 
 func TestResearchRuntimeEvidenceAndRecovery(t *testing.T) {

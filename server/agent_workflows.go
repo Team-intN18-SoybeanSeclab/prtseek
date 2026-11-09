@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,15 @@ import (
 	"github.com/Autumn-27/artex/intercept"
 	actool "github.com/Autumn-27/norma/tool"
 )
+
+var defaultCTFAgents = map[string]bool{
+	"triage":  true,
+	"command": true,
+	"solver":  true,
+	"writeup": true,
+}
+
+func isDefaultCTFAgent(key string) bool { return defaultCTFAgents[key] }
 
 func (s *Server) initAgentWorkflows() error {
 	pg := s.m.pg
@@ -32,19 +42,30 @@ func (s *Server) initAgentWorkflows() error {
 	}
 	// Interrupted children remain visible after restart; they are never silently replayed.
 	_, _ = pg.Exec(`UPDATE conversation_delegations SET state='interrupted' WHERE state='running'`)
-	for _, def := range []struct{ key, name, prompt string }{
-		{"ctf_triage", "CTF Triage", agent.CTFTriagePrompt},
-		{"ctf_planner", "CTF Planner", agent.CTFPlannerPrompt},
-		{"ctf_worker", "CTF Worker", agent.CTFWorkerPrompt},
-		{"ctf_writeup", "CTF WriteUP", agent.CTFWriteupPrompt},
+	// Retire the short-lived prefixed workflow without deleting its historical
+	// conversations. Fresh operational roles use concise, user-editable keys.
+	for _, legacy := range []string{"ctf_triage", "ctf_planner", "ctf_worker", "ctf_verifier", "ctf_writeup"} {
+		if a, _ := pg.GetAgentByKey(legacy); a != nil && !pg.AgentArchived(legacy) {
+			_ = pg.ArchiveAgent(legacy)
+		}
+	}
+	for _, def := range []struct{ key, name, description, prompt string }{
+		{"triage", "CTF Triage", "CTF 入口与材料盘点：识别题型、附件、授权范围和 flag 线索。", agent.CTFTriagePrompt},
+		{"command", "CTF Command", "CTF 编排与任务分解：建立目标、并行派发 Solver 并收敛证据。", agent.CTFPlannerPrompt},
+		{"solver", "CTF Solver", "CTF 解题执行：分析分派材料、验证链路并回传可复现证据。", agent.CTFWorkerPrompt},
+		{"writeup", "CTF WriteUP", "CTF 交付归档：基于真实证据整理 WRITEUP、EXP 与复现步骤。", agent.CTFWriteupPrompt},
 	} {
 		a, err := pg.GetAgentByKey(def.key)
 		if err != nil {
 			return err
 		}
 		if a == nil {
-			a, err = pg.CreateAgent(def.key, def.name, "CTF 模式专用角色，可编辑提示词与模型配置")
+			a, err = pg.CreateAgent(def.key, def.name, def.description)
 			if err != nil {
+				return err
+			}
+		} else if a.Description == "" || a.Description == "CTF 模式专用角色，可编辑提示词与模型配置" || a.Description == "默认 CTF 编组角色；可配置提示词、模型与可见资源。" {
+			if err = pg.UpdateAgentMeta(a.Key, a.Name, def.description); err != nil {
 				return err
 			}
 		}
@@ -57,7 +78,7 @@ func (s *Server) initAgentWorkflows() error {
 			return err
 		}
 		if current != def.prompt && updatedBy == "system" {
-			if _, err = pg.SavePrompt(a.ID, def.prompt, "CTF workflow v2", "system"); err != nil {
+			if _, err = pg.SavePrompt(a.ID, def.prompt, "CTF workflow v4", "system"); err != nil {
 				return err
 			}
 		}
@@ -65,50 +86,27 @@ func (s *Server) initAgentWorkflows() error {
 	return nil
 }
 
-func workflowMode(key string) string {
-	if strings.HasPrefix(key, "ctf_") {
-		return "ctf"
-	}
-	switch key {
-	case "goals", "planner", "mainagent", "worker", "reporter":
-		return "standard"
-	default:
-		return "custom"
-	}
-}
+// workflowMode keeps the conversation surface CTF-only without imposing one
+// rigid agent graph: the operator can choose any enabled CTF-role/custom agent.
+func workflowMode(_ string) string { return "ctf" }
 
-func workflowEntry(mode, key string) (string, error) {
-	switch mode {
-	case "ctf":
-		if key != "" && key != "planner" && key != "ctf_triage" && key != "ctf_planner" {
-			return "", fmt.Errorf("CTF 模式必须从探测 Agent 开始")
-		}
-		return "ctf_triage", nil
-	case "standard":
-		if key == "" {
-			key = "mainagent"
-		}
-		if key != "mainagent" && key != "planner" {
-			return "", fmt.Errorf("首条消息必须交给 planner 或 mainagent")
-		}
-		return key, nil
-	case "custom":
-		if key == "" || workflowMode(key) != "custom" {
-			return "", fmt.Errorf("自定义模式必须选择一个自定义 Agent")
-		}
-		return key, nil
-	default:
-		return "", fmt.Errorf("未知模式")
+func workflowEntry(_, key string) (string, error) {
+	if strings.TrimSpace(key) == "" {
+		return "triage", nil
 	}
+	key = strings.TrimSpace(key)
+	if !isDefaultCTFAgent(key) {
+		return "", fmt.Errorf("仅支持默认 CTF Agent")
+	}
+	return key, nil
 }
 
 func (s *Server) conversationTools(parent *db.Conversation) func(context.Context, string) []actool.CoreTool {
 	return func(ctx context.Context, key string) []actool.CoreTool {
-		tools := []actool.CoreTool{}
-		if key != "mainagent" && key != "planner" && key != "ctf_triage" && key != "ctf_planner" {
-			return tools
+		if !isDefaultCTFAgent(key) {
+			return nil
 		}
-		tools = append(tools, wrTool("delegate_agent", "把一个明确子任务交给下一阶段 Agent，等待并返回真实结果。CTF Triage 交给 ctf_planner，CTF Planner 交给 ctf_worker 或 ctf_writeup；普通模式可交给 worker、reporter 或自定义执行 Agent。",
+		tools := []actool.CoreTool{wrTool("delegate_agent", "将一个有明确目标、材料、边界与验收标准的 CTF 子任务交给默认角色之一（triage、command、solver、writeup），等待并返回真实结果。不要虚构分派。",
 			objSchema(map[string]any{"agent_key": strParam("目标 Agent key"), "task": strParam("子任务与验收标准，包含输入材料绝对路径")}, "agent_key", "task"),
 			func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 				var req struct {
@@ -118,12 +116,9 @@ func (s *Server) conversationTools(parent *db.Conversation) func(context.Context
 				if err := json.Unmarshal(raw, &req); err != nil {
 					return actool.Errorf("invalid delegation"), nil
 				}
-				if key == "ctf_planner" && req.AgentKey == "ctf_worker" {
-					return actool.Errorf("use delegate_agents to dispatch 2 to 6 independent ctf_worker tasks in parallel"), nil
-				}
 				return s.delegateConversation(ctx, parent, req.AgentKey, req.Task)
-			}))
-		if key == "ctf_planner" {
+			})}
+		if key == "command" {
 			tools = append(tools, s.parallelCTFDelegationTool(parent))
 		}
 		return tools
@@ -132,7 +127,7 @@ func (s *Server) conversationTools(parent *db.Conversation) func(context.Context
 
 func (s *Server) parallelCTFDelegationTool(parent *db.Conversation) actool.CoreTool {
 	taskSchema := objSchema(map[string]any{
-		"agent_key": strParam("目标 Agent key；并行分析应使用 ctf_worker"),
+		"agent_key": strParam("目标 Agent key；默认并行分析角色为 solver"),
 		"task":      strParam("不同角度的子任务、goal、材料路径与验收标准"),
 	}, "agent_key", "task")
 	return wrTool("delegate_agents", "并行执行 2 至 6 个相互独立的 CTF 子任务，并按输入顺序返回全部真实结果。",
@@ -151,14 +146,14 @@ func (s *Server) parallelCTFDelegationTool(parent *db.Conversation) actool.CoreT
 			seen := map[string]bool{}
 			for _, task := range req.Tasks {
 				text := strings.TrimSpace(task.Task)
-				if task.AgentKey != "ctf_worker" || text == "" || len(task.Task) > 64000 || seen[text] {
-					return actool.Errorf("each task must target ctf_worker with a distinct, nonempty task of at most 64000 bytes"), nil
+				if task.AgentKey != "solver" || text == "" || len(task.Task) > 64000 || seen[text] {
+					return actool.Errorf("each task must target solver with a distinct, nonempty task of at most 64000 bytes"), nil
 				}
 				seen[text] = true
 			}
 			type item struct {
 				AgentKey string `json:"agent_key"`
-				Result   string `json:"result"`
+				Result   any    `json:"result"`
 				IsError  bool   `json:"is_error"`
 			}
 			results := make([]item, len(req.Tasks))
@@ -174,7 +169,13 @@ func (s *Server) parallelCTFDelegationTool(parent *db.Conversation) actool.CoreT
 						results[i].Result, results[i].IsError = err.Error(), true
 						return
 					}
-					results[i].Result, results[i].IsError = res.Flatten(), res.IsError
+					results[i].IsError = res.IsError
+					var payload map[string]any
+					if !res.IsError && json.Unmarshal([]byte(res.Flatten()), &payload) == nil {
+						results[i].Result = payload
+					} else {
+						results[i].Result = res.Flatten()
+					}
 				}()
 			}
 			wg.Wait()
@@ -186,14 +187,11 @@ func (s *Server) delegateConversation(ctx context.Context, parent *db.Conversati
 	if strings.TrimSpace(task) == "" || len(task) > 64000 {
 		return actool.Errorf("task is empty or too long"), nil
 	}
-	if key == parent.AgentKey || key == "planner" || key == "mainagent" || key == "ctf_triage" || key == "goals" {
-		return actool.Errorf("cannot delegate back to a coordinator"), nil
+	if key == parent.AgentKey {
+		return actool.Errorf("cannot delegate to the current agent"), nil
 	}
-	if parent.AgentKey == "ctf_triage" && key != "ctf_planner" {
-		return actool.Errorf("CTF triage target: ctf_planner"), nil
-	}
-	if parent.AgentKey == "ctf_planner" && key != "ctf_worker" && key != "ctf_writeup" {
-		return actool.Errorf("CTF planner targets: ctf_worker, ctf_writeup"), nil
+	if !isDefaultCTFAgent(parent.AgentKey) || !isDefaultCTFAgent(key) {
+		return actool.Errorf("only default CTF agents are available"), nil
 	}
 	a, err := s.m.pg.GetAgentByKey(key)
 	if err != nil || a == nil || !a.Enabled || s.m.pg.AgentArchived(key) {
@@ -212,6 +210,19 @@ func (s *Server) delegateConversation(ctx context.Context, parent *db.Conversati
 	if profile > 0 {
 		pin = &profile
 	}
+	// Child agents have separate working directories. Surface the parent and
+	// original session workspaces explicitly, so uploaded challenge files and
+	// evidence remain discoverable even after several delegation hops.
+	rootID := parent.ID
+	_ = s.m.pg.QueryRow(`WITH RECURSIVE lineage(id) AS (
+	 SELECT $1 UNION ALL SELECT d.parent_id FROM conversation_delegations d JOIN lineage l ON d.child_id=l.id
+	) SELECT id FROM lineage WHERE id NOT IN (SELECT child_id FROM conversation_delegations) LIMIT 1`, parent.ID).Scan(&rootID)
+	parentDir := filepath.Join(s.m.dir, "sessions", s.convBusyKey(parent.ID))
+	workspaces := "父会话材料目录（只读引用，产物写入自己的工作目录）：" + parentDir
+	if rootID != parent.ID {
+		workspaces += "\n原始题目/上传附件目录：" + filepath.Join(s.m.dir, "sessions", s.convBusyKey(rootID))
+	}
+	childTask := task + "\n\n" + workspaces + "\n先核对实际文件与证据；不要假设目录中存在尚未验证的材料。"
 	child, err := s.m.pg.CreateConversation(key, firstLine(task, 80), pin, settings)
 	if err != nil {
 		return actool.Errorf(err.Error()), nil
@@ -224,7 +235,7 @@ func (s *Server) delegateConversation(ctx context.Context, parent *db.Conversati
 		_, _ = s.m.pg.Exec(`UPDATE conversation_delegations SET state=$2 WHERE child_id=$1`, child.ID, state)
 	}()
 	_, _ = s.m.pg.AppendConvActivity(parent.ID, db.Activity{Worker: parent.AgentKey, Kind: "text", Summary: fmt.Sprintf("已分派给 %s · 会话 #%d", key, child.ID)})
-	_, _ = s.m.pg.AppendConvActivity(child.ID, db.Activity{Worker: key, Kind: "user", Summary: firstLine(task, 200), Detail: task})
+	_, _ = s.m.pg.AppendConvActivity(child.ID, db.Activity{Worker: key, Kind: "user", Summary: firstLine(task, 200), Detail: childTask})
 	ca := s.personalChatAgent(child)
 	if ca == nil {
 		return actool.Errorf("child model unavailable"), nil
@@ -244,7 +255,7 @@ func (s *Server) delegateConversation(ctx context.Context, parent *db.Conversati
 	s.chatCancel[busyKey] = stop
 	s.chatMu.Unlock()
 	defer func() { s.chatMu.Lock(); delete(s.chatBusy, busyKey); delete(s.chatCancel, busyKey); s.chatMu.Unlock() }()
-	result, err := ca.Chat(childCtx, key, busyKey, task, a.MaxTurns, budget, a.WebSearch, func(rec db.Activity) { _, _ = s.m.pg.AppendConvActivity(child.ID, rec) })
+	result, err := ca.Chat(childCtx, key, busyKey, childTask, a.MaxTurns, budget, a.WebSearch, func(rec db.Activity) { _, _ = s.m.pg.AppendConvActivity(child.ID, rec) })
 	if err != nil {
 		if childCtx.Err() != nil {
 			state = "cancelled"
@@ -278,11 +289,13 @@ func (s *Server) conversationDelegations(w http.ResponseWriter, r *http.Request)
 	}
 	defer rows.Close()
 	type item struct {
-		ID       int64  `json:"id"`
-		AgentKey string `json:"agent_key"`
-		Title    string `json:"title"`
-		State    string `json:"state"`
-		ParentID int64  `json:"parent_id"`
+		ID         int64         `json:"id"`
+		AgentKey   string        `json:"agent_key"`
+		Title      string        `json:"title"`
+		State      string        `json:"state"`
+		ParentID   int64         `json:"parent_id"`
+		Running    bool          `json:"running"`
+		Activities []ActivityDTO `json:"activities"`
 	}
 	items := []item{}
 	for rows.Next() {
@@ -296,6 +309,28 @@ func (s *Server) conversationDelegations(w http.ResponseWriter, r *http.Request)
 	if err = rows.Err(); err != nil {
 		writeErr(w, 500, err.Error())
 		return
+	}
+	// The delegation list is also the live operator feed for a parent session.
+	// A bounded tail keeps polling cheap while still exposing the latest worker
+	// reasoning, tool calls and result messages without opening child tabs.
+	s.chatMu.Lock()
+	for i := range items {
+		items[i].Running = s.chatBusy[s.convBusyKey(items[i].ID)]
+		if items[i].Running {
+			items[i].State = "running"
+		}
+	}
+	s.chatMu.Unlock()
+	for i := range items {
+		activity, _, activityErr := pg.ConvActivityPage(items[i].ID, 0, 12)
+		if activityErr != nil {
+			writeErr(w, 500, activityErr.Error())
+			return
+		}
+		items[i].Activities = make([]ActivityDTO, 0, len(activity))
+		for _, record := range activity {
+			items[i].Activities = append(items[i].Activities, activityDTO(record))
+		}
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }

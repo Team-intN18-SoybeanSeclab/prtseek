@@ -151,8 +151,29 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		// their schema is withheld (SearchExtraTools/ExecuteExtraTool), same as MCP.
 		if hostTools != nil {
 			ht, deferredBinds := hostTools()
+			ctfCustom := map[string]bool{}
+			if isDefaultCTFAgent(agentKey) {
+				// CTF roles do not operate the legacy task/asset/platform control
+				// plane. Keep explicitly bound custom tools and capture evidence;
+				// ToolResolve still enforces each tool's DB agent binding.
+				if rows, err := pg.ListCustomTools(); err == nil {
+					for _, row := range rows {
+						ctfCustom[row.Key] = true
+					}
+				}
+				filtered := make([]actool.CoreTool, 0, len(ht))
+				for _, t := range ht {
+					if ctfHostToolAllowed(t.Name(), ctfCustom) {
+						filtered = append(filtered, t)
+					}
+				}
+				ht = filtered
+			}
 			extra = append(extra, ht...)
 			for name, boundAgents := range deferredBinds {
+				if isDefaultCTFAgent(agentKey) && !ctfCustom[name] {
+					continue
+				}
 				if !contains(boundAgents, a.Key) {
 					continue // only defer names this agent is actually bound to
 				}
@@ -178,6 +199,17 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		}
 		return extra, def, cleanup
 	}
+}
+
+func ctfHostToolAllowed(name string, custom map[string]bool) bool {
+	if custom[name] {
+		return true
+	}
+	switch name {
+	case "traffic_search", "traffic_get", "traffic_blob":
+		return true
+	}
+	return false
 }
 
 func idSet(ids []int64) map[int64]bool {
@@ -283,7 +315,7 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		// and therefore never includes ToolSet-backed domain tools. Per-task instances
 		// in the base always win: inList is built from the original incoming list so a
 		// worker's own upsert_asset is never shadowed by the server-level registry copy.
-		if len(domainReg) > 0 {
+		if len(domainReg) > 0 && !isDefaultCTFAgent(agentKey) {
 			inList := make(map[string]bool, len(tools))
 			for _, t := range tools {
 				inList[t.Name()] = true

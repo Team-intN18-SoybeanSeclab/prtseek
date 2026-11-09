@@ -13,7 +13,7 @@ const CHAT_SEND_MODE_KEY = "artex_chat_send_mode";
 const DEFAULT_CHAT_SEND_MODE: ChatSendMode = "enter";
 
 export const CHAT_SEND_MODE_OPTIONS: { value: ChatSendMode; label: string }[] = [
-  { value: "enter", label: "Enter 发送，Shift+Enter 换行" },
+  { value: "enter", label: "Enter 发送，Shift/Ctrl+Enter 换行" },
   { value: "ctrl-enter", label: "Ctrl+Enter 发送，Enter 换行" },
 ];
 
@@ -55,11 +55,11 @@ export function setChatSendMode(mode: ChatSendMode) {
 
 // shouldSubmitOnKey 判断一次按键是否应当发送。
 // isComposing / keyCode 229 是中文等输入法正在选字，必须放行，否则回车选词会误发送。
-// enter 模式只排除 Shift，与 0.3.2 的行为逐字保持一致——不改设置的用户手感不变。
+// enter 模式排除 Shift、Ctrl 和 Cmd：Enter 发送，Ctrl+Enter 用于显式换行。
 // ctrl-enter 模式同时接受 Ctrl 与 Cmd（macOS）。
 export function shouldSubmitOnKey(e: React.KeyboardEvent, mode: ChatSendMode): boolean {
   if (e.key !== "Enter") return false;
   if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return false;
   if (mode === "ctrl-enter") return e.ctrlKey || e.metaKey;
-  return !e.shiftKey;
+  return !e.shiftKey && !e.ctrlKey && !e.metaKey;
 }

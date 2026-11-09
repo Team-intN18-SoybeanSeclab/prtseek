@@ -85,7 +85,7 @@ export function ReasoningControl({
 
   return (
     <label
-      className="flex min-h-9 items-center gap-1 rounded-md border px-2 text-xs text-muted-foreground"
+      className="flex min-h-11 items-center gap-2 border px-2 text-sm text-muted-foreground"
       title={hint}
     >
       <span>{busy ? "验证中…" : "思考"}</span>
@@ -94,7 +94,7 @@ export function ReasoningControl({
         value={value}
         onChange={(e) => void choose(e.target.value)}
         disabled={disabled === true || busy || loading || !profileId}
-        className="max-w-36 border-0 bg-transparent py-1 pr-8 text-foreground focus-visible:ring-0"
+        className="max-w-36 border-0 bg-transparent py-1 pr-8 text-sm text-foreground focus-visible:ring-0"
       >
         <option value="">模型默认</option>
         {value && !efforts.includes(value) && <option value={value}>{labels[value] ?? value}（待确认）</option>}

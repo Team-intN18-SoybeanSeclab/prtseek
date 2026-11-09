@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { ArrowUpIcon, ChevronDownIcon, Paperclip, Square, X, ZapIcon } from "lucide-react";
+import { ArrowUpIcon, BotIcon, ChevronDownIcon, ChevronRightIcon, Paperclip, Square, TerminalIcon, X, ZapIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import styles from "@/components/chat-workspace.module.css";
@@ -10,23 +10,19 @@ import { ConversationList } from "@/components/conversation-list";
 import { ReasoningControl } from "@/components/reasoning-control";
 import { Transcript } from "@/components/transcript";
 import { Button } from "@/components/ui/button";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
 import { auth } from "@/lib/auth";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
+import { hideResearchEvidenceAnnotation } from "@/lib/research-evidence";
 import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-function workflowModeLabel(mode?: string) {
-  if (mode === "ctf") return "CTF";
-  if (mode === "custom") return "自定义";
-  return "普通";
-}
+import { type Delegation, type DelegationActivity, workflowsApi } from "@/lib/workflows-api";
 
-import { type Delegation, workflowsApi } from "@/lib/workflows-api";
+const legacyAgentKeys = new Set(["goals", "planner", "mainagent", "worker", "reporter", "ctf_triage", "ctf_planner", "ctf_worker", "ctf_verifier", "ctf_writeup"]);
 
 // Composer is the shared bottom input (textarea grows to a cap, Enter sends,
 // Shift+Enter newlines) — the same affordance across DraftChat and ChatView.
@@ -53,6 +49,12 @@ function Composer({
 }) {
   const sendMode = useChatSendMode();
   const picker = React.useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = React.useState(false);
+  const appendFiles = React.useCallback((incoming: File[]) => {
+    if (!incoming.length) return;
+    const known = new Set(files.map((file) => `${file.name}:${file.size}:${file.lastModified}`));
+    onFilesChange?.([...files, ...incoming.filter((file) => !known.has(`${file.name}:${file.size}:${file.lastModified}`))]);
+  }, [files, onFilesChange]);
   return (
     <div className={styles.composer}>
       {files.length > 0 && (
@@ -74,7 +76,14 @@ function Composer({
           ))}
         </div>
       )}
-      <div className={styles.composerInput}>
+      <div
+        className={styles.composerInput}
+        data-dragging={dragging || undefined}
+        onDragEnter={(event) => { event.preventDefault(); if (onFilesChange) setDragging(true); }}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
+        onDrop={(event) => { event.preventDefault(); setDragging(false); appendFiles(Array.from(event.dataTransfer.files)); }}
+      >
         {onFilesChange && (
           <>
             <input
@@ -83,7 +92,7 @@ function Composer({
               type="file"
               multiple
               onChange={(event) => {
-                onFilesChange([...files, ...Array.from(event.target.files ?? [])]);
+                appendFiles(Array.from(event.target.files ?? []));
                 event.target.value = "";
               }}
             />
@@ -114,23 +123,48 @@ function Composer({
             }
           }}
         />
-        {running ? (
-          <Button size="icon" variant="destructive" onClick={onStop} aria-label="停止运行">
+        {running && (
+          <Button size="icon" variant="ghost" onClick={onStop} disabled={disabled} aria-label="仅停止当前回复" title="仅停止当前回复">
             <Square />
           </Button>
-        ) : (
-          <Button
-            size="icon"
-            className={styles.send}
-            onClick={onSend}
-            disabled={disabled || (!value.trim() && files.length === 0)}
-            aria-label="发送消息"
-          >
-            <ArrowUpIcon />
-          </Button>
         )}
+        <Button
+          size="icon"
+          className={styles.send}
+          onClick={onSend}
+          disabled={disabled || (!value.trim() && files.length === 0)}
+          aria-label={running ? "打断并发送消息" : "发送消息"}
+          title={running ? "打断当前回复并发送" : "发送消息"}
+        >
+          <ArrowUpIcon />
+        </Button>
       </div>
+      {running && <p className={styles.interruptHint}>当前回复进行中；发送新消息会打断它。也可以只停止当前回复。</p>}
     </div>
+  );
+}
+
+function AgentPicker({ agents, value, onChange, disabled }: { agents: Agent[]; value: string; onChange: (key: string) => void; disabled?: boolean }) {
+  const [open, setOpen] = React.useState(false);
+  const selected = agents.find((agent) => agent.key === value);
+  return (
+    <Popover open={open} onOpenChange={disabled ? undefined : setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" disabled={disabled} className={cn(styles.profileButton, "disabled:pointer-events-none disabled:opacity-40")}>
+          <BotIcon className="size-3.5 shrink-0" />
+          <span className="max-w-48 truncate">{selected?.name || value || "选择 Agent"}</span>
+          <ChevronDownIcon className="size-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className={cn(styles.profileMenu, "w-72 max-w-[calc(100vw-24px)]")}>
+        <p className={cn(styles.eyebrow, "px-2 py-2")}>AGENT / 入口角色</p>
+        {agents.map((agent) => (
+          <button key={agent.key} type="button" className={cn(styles.profileOption, agent.key === value && styles.profileOptionActive)} onClick={() => { onChange(agent.key); setOpen(false); }}>
+            <span className="text-sm">{agent.name}</span><span className="text-muted-foreground text-xs">{agent.key}{agent.description ? ` · ${agent.description}` : ""}</span>
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -250,19 +284,22 @@ function DraftChat({
   profiles: LLMProfile[];
   onStarted: (c: Conversation, pending?: { input?: string; attachments?: ChatAttachment[] }) => void;
 }) {
-  const [mode, setMode] = React.useState<"standard" | "ctf">("standard");
-  const [entry, setEntry] = React.useState("mainagent");
-  const target = mode === "ctf" ? "ctf_triage" : entry;
-  const agentKey = agents.find((a) => a.key === target && a.enabled)?.key ?? "";
+  const [agentKey, setAgentKey] = React.useState("triage");
   const [llmProfileId, setLlmProfileId] = React.useState<number | null>(null);
   const [effort, setEffort] = React.useState("");
   const [input, setInput] = React.useState("");
   const [files, setFiles] = React.useState<File[]>([]);
   const [sending, setSending] = React.useState(false);
 
+  React.useEffect(() => {
+    if (agents.some((agent) => agent.key === agentKey)) return;
+    setAgentKey(agents[0]?.key ?? "");
+  }, [agents, agentKey]);
+
   async function send() {
     const msg = input.trim();
-    if ((!msg && files.length === 0) || !agentKey || sending) return;
+    if ((!msg && files.length === 0) || sending) return;
+    if (!agentKey) return toast.error("请先创建或恢复一个 Agent。");
     const profile =
       llmProfileId == null ? profiles.find((p) => p.is_default) : profiles.find((p) => Number(p.id) === llmProfileId);
     if (!profile?.api_key_hint) {
@@ -272,7 +309,7 @@ function DraftChat({
     setSending(true);
     let created: Conversation | undefined;
     try {
-      const c = await api.createConversation(agentKey, "", Number(profile.id), effort, mode);
+      const c = await api.createConversation(agentKey, "", Number(profile.id), effort);
       created = c;
       const attachments = files.length > 0 ? (await api.chatUpload("session", String(c.id), files)).attachments : [];
       await api.sendConversationMessage(c.id, msg || "请分析已附加的题目文件。", attachments);
@@ -288,52 +325,12 @@ function DraftChat({
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center px-3 sm:px-8">
       <div className="w-full max-w-3xl">
-        <div className="mb-2 flex flex-wrap gap-3 px-6 text-sm">
-          <label htmlFor="workflow-mode">
-            模式{" "}
-            <NativeSelect
-              id="workflow-mode"
-              aria-label="工作模式"
-              className="ml-2"
-              value={mode}
-              disabled={sending}
-              onChange={(e) => {
-                const next = e.target.value as "standard" | "ctf";
-                setMode(next);
-              }}
-            >
-              <option value="standard">普通</option>
-              <option value="ctf">CTF</option>
-            </NativeSelect>
-          </label>
-          {mode === "standard" ? (
-            <label htmlFor="workflow-entry">
-              首条输入{" "}
-              <NativeSelect
-                id="workflow-entry"
-                aria-label="入口 Agent"
-                className="ml-2"
-                value={entry}
-                disabled={sending}
-                onChange={(e) => setEntry(e.target.value)}
-              >
-                <option value="mainagent">mainagent</option>
-                <option value="planner">planner</option>
-              </NativeSelect>
-            </label>
-          ) : (
-            <span className="self-center text-muted-foreground">
-              探测 → Planner → 并行 Workers → Final → EXP + WriteUP
-            </span>
-          )}
-          {!agentKey && <span className="text-destructive">入口 Agent 不可用，请在管理中恢复</span>}
-        </div>
         <Composer
           value={input}
           onChange={setInput}
           onSend={send}
           disabled={sending || !agentKey}
-          placeholder="输入你的目标…"
+          placeholder="输入 CTF 题目、附件线索、目标或 flag 格式…"
           files={files}
           onFilesChange={setFiles}
         />
@@ -347,9 +344,81 @@ function DraftChat({
           effort={effort}
           onEffortChange={setEffort}
           disabled={sending}
+          rightSlot={<AgentPicker agents={agents} value={agentKey} onChange={setAgentKey} disabled={sending || agents.length === 0} />}
         />
       </div>
     </div>
+  );
+}
+
+function delegationStateLabel(state: string, running: boolean) {
+  if (running || state === "running") return "执行中";
+  if (state === "completed") return "已完成";
+  if (state === "cancelled") return "已取消";
+  return "失败";
+}
+
+function delegationActivityLabel(activity: DelegationActivity) {
+  const prefix = activity.kind === "tool_use" || activity.kind === "tool_result" ? activity.tool || "工具" : activity.kind;
+  return `${prefix} · ${hideResearchEvidenceAnnotation(activity.summary) || "等待新的动态…"}`;
+}
+
+function DelegationConsole({ delegations }: { delegations: Delegation[] }) {
+  const activeCount = delegations.filter((job) => job.running || job.state === "running").length;
+  return (
+    <section className={styles.delegationConsole} aria-label="子 Agent 动态">
+      <div className={styles.delegationHeading}>
+        <div>
+          <span className={styles.delegationCode}>FIELD OPERATORS / 实时状态</span>
+          <strong>子 Agent</strong>
+        </div>
+        <span className={styles.delegationCount} data-live={activeCount > 0}>
+          <span className={styles.delegationCountDot} />
+          {activeCount ? `${activeCount} 执行中` : `${delegations.length} 已记录`}
+        </span>
+      </div>
+      <div className={styles.delegationGrid}>
+        {delegations.map((job) => {
+          const live = job.running || job.state === "running";
+          return (
+            <details key={job.id} className={styles.delegationCard} open={live || undefined}>
+              <summary>
+                <span className={live ? styles.delegationPulse : styles.delegationMark} />
+                <BotIcon className="size-3.5 shrink-0" />
+                <span className={styles.delegationAgent}>{job.agent_key}</span>
+                <span className={styles.delegationState} data-live={live}>
+                  {delegationStateLabel(job.state, job.running)}
+                </span>
+                <ChevronRightIcon className={styles.delegationChevron} />
+              </summary>
+              <div className={styles.delegationBody}>
+                <div className={styles.delegationTaskMeta}>SESSION #{job.id} <span>· {job.activities.length} 条动态</span></div>
+                <p className={styles.delegationTitle}>{job.title || "未命名子任务"}</p>
+                {job.activities.length > 0 ? (
+                  <ol className={styles.delegationActivity}>
+                    {job.activities.slice(-8).map((activity) => (
+                      <li key={activity.seq} data-error={activity.is_error || undefined}>
+                        {activity.kind === "tool_use" || activity.kind === "tool_result" ? (
+                          <TerminalIcon className="size-3 shrink-0" />
+                        ) : (
+                          <span className={styles.delegationEventDot} />
+                        )}
+                        <span title={hideResearchEvidenceAnnotation(activity.summary)}>{delegationActivityLabel(activity)}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className={styles.delegationEmpty}>已分派，等待 Worker 回传第一条动态。</p>
+                )}
+                <a className={styles.delegationLink} href={`/chat?c=${job.id}`} target="_blank" rel="noopener noreferrer">
+                  查看完整子会话 ↗
+                </a>
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -439,11 +508,11 @@ function ChatView({
   }
 
   async function send() {
-    if ((!input.trim() && files.length === 0) || busy || running) return;
+    if ((!input.trim() && files.length === 0) || busy) return;
     setBusy(true);
     try {
       const attachments = files.length > 0 ? (await api.chatUpload("session", String(conv.id), files)).attachments : [];
-      await api.sendConversationMessage(conv.id, input.trim() || "请分析已附加的题目文件。", attachments);
+      await api.sendConversationMessage(conv.id, input.trim() || "请分析已附加的题目文件。", attachments, running);
       setInput("");
       setFiles([]);
       setRunning(true);
@@ -456,11 +525,14 @@ function ChatView({
   }
 
   async function stop() {
+    if (busy) return;
+    setBusy(true);
     try {
       await api.stopConversation(conv.id);
-      setRunning(false);
     } catch (e) {
       toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -477,26 +549,13 @@ function ChatView({
   }
 
   return (
-    <>
-      <div className="px-6 py-2 text-xs text-muted-foreground">
-        {workflowModeLabel(conv.mode)} · {conv.agent_key}
+    <div className={styles.chatSplit} data-ops={delegations.length > 0 || undefined}>
+      <main className={styles.chatMain}>
+      <div className={styles.missionBar}>
+        <span className={styles.missionEyebrow}>CTF CONTROL / SESSION #{conv.id}</span>
+        <span className={styles.missionRole}>{conv.agent_key}</span>
+        <span className={styles.missionRun} data-live={running}>{running ? "● 运行中" : "待命"}</span>
       </div>
-      {delegations.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-6 pb-2">
-          {delegations.map((job) => (
-            <a
-              key={job.id}
-              className="border px-3 py-1 text-xs"
-              href={`/chat?c=${job.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={job.title}
-            >
-              #{job.id} {job.agent_key} · {job.state} · {job.title} ↗
-            </a>
-          ))}
-        </div>
-      )}
       {error && (
         <p role="alert" className="px-6 py-2 text-sm text-destructive">
           记录加载失败：{error}
@@ -524,7 +583,7 @@ function ChatView({
           value={input}
           onChange={setInput}
           onSend={() => void send()}
-          disabled={busy || running}
+          disabled={busy}
           running={running}
           onStop={() => void stop()}
           placeholder="输入消息…"
@@ -541,7 +600,9 @@ function ChatView({
           disabled={busy || running}
         />
       </div>
-    </>
+      </main>
+      {delegations.length > 0 && <aside className={styles.operationsRail}><DelegationConsole delegations={delegations} /></aside>}
+    </div>
   );
 }
 
@@ -571,7 +632,7 @@ export default function ChatPage() {
     const version = ++request.current;
     setLoading(true);
     try {
-      const items = await api.conversations();
+      const items = (await api.conversations()).filter((item) => !legacyAgentKeys.has(item.agent_key));
       if (version !== request.current) return;
       setConversations(items);
       const current = items.find((item) => item.id === activeId.current) ?? null;
@@ -597,12 +658,6 @@ export default function ChatPage() {
       void reload();
     };
     restore();
-    api
-      .agents()
-      .then((items) => {
-        if (live) setAgents(items);
-      })
-      .catch((e) => toast.error(e.message));
     const refreshProfiles = () => {
       api
         .llmProfiles()
@@ -612,6 +667,7 @@ export default function ChatPage() {
         .catch((e) => toast.error(e.message));
     };
     refreshProfiles();
+    api.agents().then((items) => setAgents(items.filter((agent) => !legacyAgentKeys.has(agent.key)))).catch((e) => toast.error(e.message));
     window.addEventListener("popstate", restore);
     window.addEventListener("prtseek-models-updated", refreshProfiles);
     return () => {

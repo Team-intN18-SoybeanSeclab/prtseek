@@ -20,7 +20,7 @@ func (s *Server) personalResearchState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, _, configured := s.personalProfileConfig(c)
-	enabled := configured && agent.IsDeepSeekFlash(cfg.Model)
+	enabled := configured && (agent.IsDeepSeekFlash(cfg.Model) || isDefaultCTFAgent(c.AgentKey))
 	root := filepath.Join(s.m.dir, "sessions", s.convBusyKey(c.ID))
 	if _, err := os.Stat(root); os.IsNotExist(err) {
 		writeJSON(w, 200, map[string]any{"enabled": enabled, "version": "1.2.0", "memory": nil})

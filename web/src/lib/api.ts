@@ -1144,19 +1144,13 @@ export const api = {
 
   // ---- conversations (chat page) ----
   conversations: () => get<{ conversations: Conversation[] }>("/conversations").then((r) => arr(r.conversations)),
-  createConversation: (
-    agent_key: string,
-    title = "",
-    llm_profile_id?: number | null,
-    reasoning_effort = "",
-    mode: "standard" | "ctf" | "custom" = "standard",
-  ) =>
+  createConversation: (agent_key = "triage", title = "", llm_profile_id?: number | null, reasoning_effort = "") =>
     post<Conversation>("/conversations", {
       agent_key,
       title,
       llm_profile_id: llm_profile_id ?? null,
       reasoning_effort,
-      mode,
+      mode: "ctf",
     }),
   updateConversation: (id: number, input: { title?: string; pinned?: boolean }) =>
     patch<Conversation>(`/conversations/${id}`, input),
@@ -1183,8 +1177,8 @@ export const api = {
   },
   conversationMsgDetail: (id: number, seq: number) =>
     get<{ detail: string }>(`/conversations/${id}/messages/${seq}`).then((r) => r.detail ?? ""),
-  sendConversationMessage: (id: number, message: string, attachments?: ChatAttachment[]) =>
-    post<{ status: string }>(`/conversations/${id}/messages`, { message, attachments }),
+  sendConversationMessage: (id: number, message: string, attachments?: ChatAttachment[], interrupt = false) =>
+    post<{ status: string }>(`/conversations/${id}/messages`, { message, attachments, interrupt }),
   stopConversation: (id: number) => post<{ status: string }>(`/conversations/${id}/stop`, {}),
   saveAgentPrompt: (key: string, template: string, note = "") =>
     put<{ version: number }>(`/agents/${key}/prompt`, { template, note }),
