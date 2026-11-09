@@ -8,6 +8,7 @@
 
 相较于ARTEX，prtseek删除了有关SRC挖掘等不包括在CTF范畴中的功能和代码，简化了前端，并将原始渗透Agent工作流改为CTF工作流。
 使用此Agent，模型为DeepSeek V4.1 Flash，我们战队【踹哈公寓】在第十届强网杯天基网络安全赛道CTF部分中获得第三名：
+
 ![image](./docs/images/qwb-2026-tianji-ranking-cropped.png)
 
 ## 快速启动
