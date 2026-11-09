@@ -4,7 +4,11 @@
 
 本项目基于 [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX) 二次开发，原始项目来自 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)。保留 Go 模块路径 `github.com/Autumn-27/artex` 和 AGPL-3.0 许可证。
 
-相较于ARTEX，prtseek
+## 项目改进
+
+相较于ARTEX，prtseek删除了有关SRC挖掘等不包括在CTF范畴中的功能和代码，简化了前端，并将原始渗透Agent工作流改为CTF工作流。
+使用此Agent，模型为DeepSeek V4.1 Flash，我们战队【踹哈公寓】在第十届强网杯天基网络安全赛道CTF部分中获得第三名：
+![image](./docs/images/qwb-2026-tianji-ranking-cropped.png)
 
 ## 快速启动
 
@@ -47,20 +51,6 @@ docker compose down
 ```
 
 Dockerfile 从当前源码构建前后端；Compose 只有 `prtseek` 服务，访问 <http://localhost:8787/chat/>。数据库与其他运行数据映射至宿主机 `data/`。`.env` 可选，变量示例见 [.env.example](.env.example)。
-
-## 备份与更新
-
-最简单的备份方式是停止应用后复制整个 `data/`，包括主数据库、独立流量数据库、JWT 密钥、证据和会话文件。运行中不能只复制 `prtseek.db`：已提交数据可能还在 `-wal` 文件中。需要在线数据库备份时使用 SQLite 的 backup 接口，并另外协调证据文件备份。
-
-更新源码后：Windows 停止进程再使用 `-Build`；Linux/macOS 执行 `bash update.sh` 生成 `prtseek-next`，停止旧进程后替换二进制。构建和更新脚本不删除用户数据。
-
-忘记密码时，可使用 `go run ./cmd/reset-password -db data/prtseek.db`，从标准输入输入新密码并换行。该工具要求目标数据库已存在。终端直接输入可能回显；Bash 可隐藏输入：
-
-```bash
-read -rs -p 'New password: ' password; echo
-printf '%s\n' "$password" | bash reset-password.sh -db data/prtseek.db
-unset password
-```
 
 ## 许可证
 
