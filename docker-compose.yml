@@ -1,0 +1,19 @@
+services:
+  prtseek:
+    build: .
+    image: prtseek:local
+    ports:
+      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:8788:8788"
+    environment:
+      prtseek_DB_PATH: /app/data/prtseek.db
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      prtseek_LLM_PROVIDER: ${prtseek_LLM_PROVIDER:-}
+      prtseek_LLM_MODEL: ${prtseek_LLM_MODEL:-}
+      prtseek_LLM_BASE_URL: ${prtseek_LLM_BASE_URL:-}
+      prtseek_LLM_PROXY: ${prtseek_LLM_PROXY:-}
+    volumes:
+      - ./data:/app/data
+      - ./skills:/app/skills
+    restart: unless-stopped

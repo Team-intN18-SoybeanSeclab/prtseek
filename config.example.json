@@ -1,0 +1,5 @@
+{
+  "_comment": "可选配置。无需创建即可启动；SQLite 自动初始化。相对路径以启动工作目录为基准。",
+  "database": { "path": "data/prtseek.db" },
+  "skill_dir": "skills"
+}

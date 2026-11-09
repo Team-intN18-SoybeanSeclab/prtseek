@@ -1,0 +1,57 @@
+name: Validate
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: go test ./... -count=1 -timeout=180s
+      - run: npm ci
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npm run audit:unused
+        working-directory: web
+      - run: npm run build:static
+        working-directory: web
+      - name: Build and smoke-test Unix launcher
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p server/webui/dist
+          cp -R web/out/. server/webui/dist/
+          prtseek_SKIP_FRONTEND=1 prtseek_OUTPUT="$PWD/prtseek" bash build.sh
+          go test -tags embedui ./server -run TestEmbeddedWorkbenchRoutes -count=1
+          python scripts/smoke.py ./prtseek --launcher ./start.sh
+      - name: Build and smoke-test Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force server/webui/dist | Out-Null
+          Copy-Item web/out/* server/webui/dist -Recurse -Force
+          go build -tags embedui -o prtseek.exe ./cmd/prtseek
+          go test -tags embedui ./server -run TestEmbeddedWorkbenchRoutes -count=1
+          python scripts/smoke.py ./prtseek.exe
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - run: docker build -t prtseek:ci .
+      - name: Container health, replacement and persistence
+        run: python3 scripts/smoke-container.py prtseek:ci
