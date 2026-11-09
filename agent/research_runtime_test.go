@@ -334,8 +334,12 @@ func TestResearchRuntimeLinkedTaskRoot(t *testing.T) {
 	if err := AttachResearchRuntime(ctx, &opts, "deepseek-flash", taskRoot, "继续"); err != nil {
 		t.Fatal(err)
 	}
-	if opts.Hooks.(*researchRuntime).memory.EvidenceRoot() != conversationRoot {
-		t.Fatal("handoff lost conversation evidence root")
+	want, err := filepath.EvalSymlinks(conversationRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opts.Hooks.(*researchRuntime).memory.EvidenceRoot(); got != want {
+		t.Fatalf("handoff lost conversation evidence root: got %q, want %q", got, want)
 	}
 }
 
