@@ -1,0 +1,218 @@
+/* Restored two-stage PRTS introduction; finish on the current application theme. */
+.prts-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  color: #f4f5f2;
+  background: #121516;
+}
+.prts-boot::backdrop {
+  background: transparent;
+}
+.prts-boot[data-playing="true"] {
+  animation: prts-boot-sequence var(--prts-boot-duration) linear both;
+}
+.prts-boot:not([open]) {
+  display: none;
+}
+.prts-boot-emblem,
+.prts-boot-wordmark {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.prts-boot-emblem {
+  gap: 24px;
+  opacity: 0;
+}
+.prts-boot-mark {
+  width: 80px;
+  height: 80px;
+}
+.prts-boot-emblem > span,
+.prts-boot-caption,
+.prts-boot-index {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.22em;
+}
+.prts-boot-emblem > span {
+  opacity: 0.6;
+}
+.prts-boot-wordmark {
+  width: min(340px, 76vw);
+  color: var(--foreground);
+  opacity: 0;
+}
+.prts-boot-wordmark > strong {
+  font-family: var(--font-geist), Arial, sans-serif;
+  font-size: clamp(48px, 7vw, 76px);
+  font-weight: 750;
+  letter-spacing: -0.065em;
+  line-height: 1;
+}
+.prts-boot-os {
+  margin-top: 12px;
+  font-size: 12px;
+  letter-spacing: 0.23em;
+}
+.prts-boot-rule {
+  width: 100%;
+  height: 1px;
+  margin: 18px 0;
+  background: var(--border);
+  transform: scaleX(0);
+}
+.prts-boot-caption {
+  font-size: clamp(7px, 1.8vw, 9px);
+  letter-spacing: 0.28em;
+}
+.prts-boot-index {
+  position: absolute;
+  bottom: 40px;
+  left: 28px;
+  opacity: 0.55;
+}
+.prts-boot-progress {
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.3;
+  transform: scaleX(0);
+  transform-origin: left;
+}
+.prts-boot[data-playing="true"] .prts-boot-emblem {
+  animation: prts-boot-emblem var(--prts-boot-duration) linear both;
+}
+.prts-boot[data-playing="true"] .prts-boot-mark path {
+  stroke-dasharray: 200;
+  animation: prts-boot-draw var(--prts-boot-duration) ease-out both;
+}
+.prts-boot[data-playing="true"] .prts-boot-wordmark {
+  animation: prts-boot-wordmark var(--prts-boot-duration) linear both;
+}
+.prts-boot[data-playing="true"] .prts-boot-rule {
+  animation: prts-boot-rule var(--prts-boot-duration) ease-out both;
+}
+.prts-boot[data-playing="true"] .prts-boot-progress {
+  animation: prts-boot-progress var(--prts-boot-duration) linear both;
+}
+.prts-boot-skip {
+  position: absolute;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  right: max(24px, env(safe-area-inset-right));
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid currentColor;
+  color: inherit;
+  background: transparent;
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+.prts-boot-skip:focus-visible {
+  outline: 2px solid var(--prts-cyan);
+  outline-offset: 4px;
+}
+@keyframes prts-boot-sequence {
+  0%,
+  42% {
+    color: #f4f5f2;
+    background: #121516;
+    opacity: 1;
+  }
+  54%,
+  90% {
+    color: var(--foreground);
+    background: var(--background);
+    opacity: 1;
+  }
+  100% {
+    color: var(--foreground);
+    background: var(--background);
+    opacity: 0;
+  }
+}
+@keyframes prts-boot-emblem {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  36% {
+    opacity: 1;
+  }
+  46%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes prts-boot-draw {
+  0% {
+    stroke-dashoffset: 200;
+  }
+  34%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes prts-boot-wordmark {
+  0%,
+  48% {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+  }
+  62%,
+  100% {
+    opacity: 1;
+    clip-path: inset(0);
+  }
+}
+@keyframes prts-boot-rule {
+  0%,
+  58% {
+    transform: scaleX(0);
+  }
+  76%,
+  100% {
+    transform: scaleX(1);
+  }
+}
+@keyframes prts-boot-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prts-boot[data-playing="true"],
+  .prts-boot[data-playing="true"] * {
+    animation: none !important;
+  }
+  .prts-boot {
+    color: var(--foreground);
+    background: var(--background);
+  }
+  .prts-boot-emblem {
+    display: none;
+  }
+  .prts-boot-wordmark {
+    opacity: 1;
+  }
+  .prts-boot-rule {
+    transform: none;
+  }
+}

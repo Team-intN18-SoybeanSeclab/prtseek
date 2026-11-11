@@ -7,8 +7,8 @@
   --foreground: #20272a;
   --card: #f8f9f6;
   --card-foreground: #20272a;
-  --popover: #f8f9f6;
-  --popover-foreground: #20272a;
+  --popover: var(--card);
+  --popover-foreground: var(--card-foreground);
   --primary: #d89b27;
   --primary-foreground: #15191b;
   --secondary: #e1e5e1;
@@ -20,14 +20,14 @@
   --border: #bdc7c4;
   --input: #aab9b6;
   --ring: #359c9b;
-  --sidebar: #151b1d;
-  --sidebar-foreground: #e8eeea;
-  --sidebar-primary: #e5a72c;
-  --sidebar-primary-foreground: #15191b;
-  --sidebar-accent: #273438;
-  --sidebar-accent-foreground: #fff;
-  --sidebar-border: #3e4c4f;
-  --sidebar-ring: #d89b27;
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--card-foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
   --chart-1: #2c383a;
   --chart-2: #359c9b;
   --chart-3: #798e88;
@@ -52,8 +52,8 @@
   --foreground: #e5ece8;
   --card: #141d20;
   --card-foreground: #e5ece8;
-  --popover: #182225;
-  --popover-foreground: #e5ece8;
+  --popover: var(--card);
+  --popover-foreground: var(--card-foreground);
   --primary: #e3a62d;
   --primary-foreground: #161a1b;
   --secondary: #1d292c;
@@ -67,9 +67,14 @@
   --ring: #4bb6b1;
   --prts-signal: #e3a62d;
   --prts-cyan: #4bb6b1;
-  --sidebar: #11191b;
-  --sidebar-border: #304044;
-  --sidebar-ring: #e3a62d;
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--card-foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
   --prts-ink: #e5ece8;
   --prts-paper: #182225;
   --prts-line: #314145;
@@ -263,9 +268,9 @@ body {
 }
 
 .prts-sidebar [data-slot="sidebar-menu-button"][data-active="true"] {
-  border-left: 2px solid var(--prts-signal);
-  background: rgba(125, 142, 142, 0.18);
-  color: #fff;
+  border-left: 2px solid var(--sidebar-primary);
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
 }
 
 .prts-sidebar [data-slot="sidebar-menu"] {
@@ -278,8 +283,8 @@ body {
 }
 
 .prts-sidebar [data-slot="sidebar-footer"] [data-slot="avatar-fallback"] {
-  background: #343c3f;
-  color: #cdd8d4;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
 }
 
 .prts-sidebar-label {
@@ -287,14 +292,14 @@ body {
   font-family: var(--font-mono), monospace;
   letter-spacing: 0.14em;
   font-size: 14px;
-  color: #929d98;
+  color: var(--muted-foreground);
 }
 
 .prts-sidebar-note {
   margin: auto 22px 24px;
   display: grid;
   gap: 9px;
-  color: #9fa9a5;
+  color: var(--muted-foreground);
   font-family: var(--font-mono), monospace;
   font-size: 14px;
   letter-spacing: 0.08em;
@@ -305,7 +310,7 @@ body {
   content: "";
   height: 30px;
   width: 29px;
-  background: repeating-linear-gradient(135deg, transparent 0 4px, #646e69 4px 5px);
+  background: repeating-linear-gradient(135deg, transparent 0 4px, var(--muted-foreground) 4px 5px);
   opacity: 0.6;
   margin-bottom: 6px;
 }
@@ -949,7 +954,9 @@ body {
   content: "TACTICAL // CTF";
   margin-left: auto;
   color: var(--muted-foreground);
-  font: 10px var(--font-mono), monospace;
+  font:
+    10px var(--font-mono),
+    monospace;
   letter-spacing: 0.18em;
 }
 
@@ -981,7 +988,8 @@ body {
   height: 100%;
   min-height: 0;
   border-right: 1px solid var(--border);
-  background: var(--card);
+  background: var(--sidebar);
+  color: var(--sidebar-foreground);
 }
 .conversation-main {
   display: flex;
@@ -995,8 +1003,9 @@ body {
   border-bottom-color: var(--border);
 }
 .conversation-entry[data-active="true"] {
-  border-left: 2px solid var(--primary);
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-left: 2px solid var(--sidebar-primary);
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
 }
 .conversation-entry button {
   cursor: pointer;
@@ -1068,10 +1077,10 @@ body {
   max-width: 100vw;
 }
 .conversation-entry:hover {
-  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  background: color-mix(in srgb, var(--sidebar-foreground) 10%, transparent);
 }
 .conversation-entry[data-active="true"] {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  background: var(--sidebar-accent);
 }
 @media (max-width: 767px) {
   .prts-page-content {

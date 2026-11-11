@@ -8,6 +8,7 @@
 @import "../styles/presets/soft-pop.css";
 @import "../styles/presets/tangerine.css";
 @import "../styles/prtsseek.css";
+@import "../styles/prts-boot.css";
 @custom-variant dark (&:is(.dark *));
 @theme inline {
   --text-xs: 0.6875rem;
