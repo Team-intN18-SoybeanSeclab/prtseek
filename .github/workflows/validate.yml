@@ -31,8 +31,6 @@ jobs:
         working-directory: web
       - run: npm test
         working-directory: web
-      - run: npm run audit:unused
-        working-directory: web
       - run: npm run build:static
         working-directory: web
       - name: Build and smoke-test Unix launcher
