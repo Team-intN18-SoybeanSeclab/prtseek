@@ -1,5 +1,7 @@
 * text=auto
 *.sh text eol=lf
+# Husky hooks are extensionless shell scripts; CRLF also breaks Knip's shell parsing.
+web/.husky/* text eol=lf
 Dockerfile text eol=lf
 *.py text eol=lf
 *.yml text eol=lf
