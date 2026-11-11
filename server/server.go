@@ -74,7 +74,9 @@ type Server struct {
 	// convBusyKey), so a manual stop can abort JUST that session's agent run. Set/
 	// cleared alongside chatBusy under chatMu. Aborting a run does NOT touch the P3
 	// trigger queue — the drain goroutine simply proceeds to the next queued fire.
-	chatCancel map[string]context.CancelCauseFunc
+	chatCancel   map[string]context.CancelCauseFunc
+	workflowMu   sync.Mutex
+	workflowRuns map[int64]*ctfWorkflowRun
 
 	// triggerQ buffers P3 trigger fires PER AGENT. A per-agent "pump" launches runs up
 	// to a concurrency limit derived from the agent's策略: serial → limit 1 (+ optional
@@ -705,6 +707,9 @@ func (s *Server) Handler() http.Handler {
 	s.registerSideRoutes(mux)
 	s.registerPersonalSettingsRoutes(mux)
 	mux.HandleFunc("GET /api/conversations/{id}/delegations", s.conversationDelegations)
+	mux.HandleFunc("GET /api/conversations/{id}/overview", s.conversationOverview)
+	mux.HandleFunc("GET /api/conversations/{id}/files", s.conversationFiles)
+	mux.HandleFunc("GET /api/conversations/{id}/file", s.conversationFile)
 	s.registerPersonalBackgroundRoutes(mux)
 	s.registerToolpackRoutes(mux)
 
@@ -1470,16 +1475,19 @@ func (s *Server) setLLM(w http.ResponseWriter, r *http.Request) {
 // testLLM makes a real minimal completion to verify the config works.
 func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Provider         string `json:"provider"`
-		Model            string `json:"model"`
-		BaseURL          string `json:"base_url"`
-		Proxy            string `json:"proxy"`
-		APIKey           string `json:"api_key"`
-		ThinkingType     string `json:"thinking_type"`
-		ReasoningEffort  string `json:"reasoning_effort"`
-		ProfileID        *int64 `json:"profile_id"`         // 测已存 profile 时传入：api_key 为空则用它存的 key
-		Streaming        *bool  `json:"streaming"`          // 省略=流式，与保存 profile 时同一套默认
-		SessionHeaderKey string `json:"session_header_key"` // 非空=测试时也带该自定义会话头，值为一次性随机 session id
+		Provider         string  `json:"provider"`
+		Model            string  `json:"model"`
+		BaseURL          string  `json:"base_url"`
+		Proxy            string  `json:"proxy"`
+		APIKey           string  `json:"api_key"`
+		ThinkingType     string  `json:"thinking_type"`
+		ReasoningEffort  string  `json:"reasoning_effort"`
+		ProfileID        *int64  `json:"profile_id"` // 测已存 profile 时传入：api_key 为空则用它存的 key
+		Streaming        *bool   `json:"streaming"`  // 省略=流式，与保存 profile 时同一套默认
+		SessionHeaderKey *string `json:"session_header_key"`
+		TestTools        bool    `json:"test_tools"`
+		MaxTokens        int     `json:"max_tokens"`
+		MaxTokensField   string  `json:"max_tokens_field"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err.Error())
@@ -1498,16 +1506,19 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 	// 自定义会话头名照该配置来：非空则测试请求也发这个头(值为一次性随机 session id，
 	// 见 TestConnection)。opencode zen 等强制要求 x-opencode-session 的端点，缺了它
 	// 直接 400，必须在测试路径上也带上，否则"对话通、测试 400"。
-	cfg.SessionHeaderKey = req.SessionHeaderKey
+	if req.SessionHeaderKey != nil {
+		cfg.SessionHeaderKey = *req.SessionHeaderKey
+	}
+	cfg.MaxTokens, cfg.MaxTokensField = req.MaxTokens, req.MaxTokensField
 	// API Key 解析优先级：表单输入 > 指定 profile 存的 key > 全局配置的 key。
 	// 已存 profile 的 key 不回传浏览器，所以测试已存配置时表单为空，需从 DB 取。
 	// 会话头名同理：表单未带时用已存 profile 的值兜底。
-	if req.ProfileID != nil && (cfg.APIKey == "" || cfg.SessionHeaderKey == "") {
+	if req.ProfileID != nil && (cfg.APIKey == "" || req.SessionHeaderKey == nil) {
 		if p, err := s.m.pg.ProfileByID(*req.ProfileID); err == nil && p != nil {
 			if cfg.APIKey == "" {
 				cfg.APIKey = p.APIKey
 			}
-			if cfg.SessionHeaderKey == "" {
+			if req.SessionHeaderKey == nil {
 				cfg.SessionHeaderKey = p.SessionHeaderKey
 			}
 		}
@@ -1524,14 +1535,18 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 	// 重试参数【不】带进连接测试:测试有 30s 硬超时,把配置的重试次数/长间隔叠上去
 	// 只会让一个本来能用的端点测成"超时失败"。测试看的是"这个端点通不通",重试节奏
 	// 是跑起来之后的事。
-	lat, reply, err := agent.TestConnection(r.Context(), cfg)
+	test := agent.TestConnection
+	if req.TestTools {
+		test = agent.TestAgentConnection
+	}
+	lat, reply, err := test(r.Context(), cfg)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": redactPersonalError(err, cfg.APIKey)})
 		return
 	}
 	// 回传模型实际回复，让"测试通过"有据可查：看得见它确实说了话，而不只是 HTTP 200。
 	writeJSON(w, 200, map[string]any{
-		"ok": true, "latency_ms": lat.Milliseconds(), "model": cfg.Model, "reply": truncateReply(strings.ReplaceAll(reply, cfg.APIKey, "[REDACTED]")),
+		"ok": true, "tools_verified": req.TestTools, "latency_ms": lat.Milliseconds(), "model": cfg.Model, "reply": truncateReply(strings.ReplaceAll(reply, cfg.APIKey, "[REDACTED]")),
 	})
 }
 

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import styles from "@/components/chat-workspace.module.css";
 import { ConversationList } from "@/components/conversation-list";
+import { ConversationOverview } from "@/components/conversation-overview";
 import { ReasoningControl } from "@/components/reasoning-control";
 import { Transcript } from "@/components/transcript";
 import { Button } from "@/components/ui/button";
@@ -14,13 +15,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
 import { auth } from "@/lib/auth";
+import { type PendingChat, type UploadedFile, uploadChatFiles } from "@/lib/chat-attachments";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
+import { executionLabel, outcomeLabel } from "@/lib/ctf-status";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { hideResearchEvidenceAnnotation } from "@/lib/research-evidence";
-import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile } from "@/lib/types";
+import type { Activity, Agent, Conversation, LLMProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { type Delegation, type DelegationActivity, workflowsApi } from "@/lib/workflows-api";
+import { type ConversationOverview as Overview, type Delegation, type DelegationActivity, workflowsApi } from "@/lib/workflows-api";
 
 const legacyAgentKeys = new Set(["goals", "planner", "mainagent", "worker", "reporter", "ctf_triage", "ctf_planner", "ctf_worker", "ctf_verifier", "ctf_writeup"]);
 
@@ -51,10 +54,10 @@ function Composer({
   const picker = React.useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = React.useState(false);
   const appendFiles = React.useCallback((incoming: File[]) => {
-    if (!incoming.length) return;
+    if (disabled || !incoming.length) return;
     const known = new Set(files.map((file) => `${file.name}:${file.size}:${file.lastModified}`));
     onFilesChange?.([...files, ...incoming.filter((file) => !known.has(`${file.name}:${file.size}:${file.lastModified}`))]);
-  }, [files, onFilesChange]);
+  }, [disabled, files, onFilesChange]);
   return (
     <div className={styles.composer}>
       {files.length > 0 && (
@@ -68,6 +71,7 @@ function Composer({
               <button
                 type="button"
                 aria-label={`移除附件 ${file.name}`}
+                disabled={disabled}
                 onClick={() => onFilesChange?.(files.filter((_, item) => item !== index))}
               >
                 <X className="size-3" />
@@ -282,7 +286,7 @@ function DraftChat({
 }: {
   agents: Agent[];
   profiles: LLMProfile[];
-  onStarted: (c: Conversation, pending?: { input?: string; attachments?: ChatAttachment[] }) => void;
+  onStarted: (c: Conversation, pending?: PendingChat) => void;
 }) {
   const [agentKey, setAgentKey] = React.useState("triage");
   const [llmProfileId, setLlmProfileId] = React.useState<number | null>(null);
@@ -290,6 +294,7 @@ function DraftChat({
   const [input, setInput] = React.useState("");
   const [files, setFiles] = React.useState<File[]>([]);
   const [sending, setSending] = React.useState(false);
+  const uploads = React.useRef<UploadedFile[]>([]);
 
   React.useEffect(() => {
     if (agents.some((agent) => agent.key === agentKey)) return;
@@ -311,13 +316,14 @@ function DraftChat({
     try {
       const c = await api.createConversation(agentKey, "", Number(profile.id), effort);
       created = c;
-      const attachments = files.length > 0 ? (await api.chatUpload("session", String(c.id), files)).attachments : [];
+      uploads.current = await uploadChatFiles(files, uploads.current, (batch) => api.chatUpload("session", String(c.id), batch));
+      const attachments = uploads.current.map((item) => item.attachment);
       await api.sendConversationMessage(c.id, msg || "请分析已附加的题目文件。", attachments);
       setFiles([]);
       onStarted({ ...c, running: true });
     } catch (e) {
       toast.error("发送失败：" + (e as Error).message);
-      if (created) onStarted(created, { input });
+      if (created) onStarted(created, { input, files, uploads: uploads.current });
       setSending(false);
     }
   }
@@ -352,10 +358,7 @@ function DraftChat({
 }
 
 function delegationStateLabel(state: string, running: boolean) {
-  if (running || state === "running") return "执行中";
-  if (state === "completed") return "已完成";
-  if (state === "cancelled") return "已取消";
-  return "失败";
+  return executionLabel(state, running);
 }
 
 function delegationActivityLabel(activity: DelegationActivity) {
@@ -394,6 +397,7 @@ function DelegationConsole({ delegations }: { delegations: Delegation[] }) {
               <div className={styles.delegationBody}>
                 <div className={styles.delegationTaskMeta}>SESSION #{job.id} <span>· {job.activities.length} 条动态</span></div>
                 <p className={styles.delegationTitle}>{job.title || "未命名子任务"}</p>
+                <p className="py-1 text-xs text-muted-foreground">目标：{outcomeLabel(job.outcome?.state ?? "unverified")}{job.outcome?.summary ? ` · ${job.outcome.summary}` : ""}</p>
                 {job.activities.length > 0 ? (
                   <ol className={styles.delegationActivity}>
                     {job.activities.slice(-8).map((activity) => (
@@ -433,19 +437,22 @@ function ChatView({
 }: {
   conv: Conversation;
   profiles: LLMProfile[];
-  initial?: { input?: string };
+  initial?: PendingChat;
   onConvUpdated: () => void;
 }) {
   const [messages, setMessages] = React.useState<Activity[]>([]);
   const [delegations, setDelegations] = React.useState<Delegation[]>([]);
+  const [overview, setOverview] = React.useState<Overview | null>(null);
   const [input, setInput] = React.useState(initial?.input ?? "");
-  const [files, setFiles] = React.useState<File[]>([]);
+  const [files, setFiles] = React.useState<File[]>(initial?.files ?? []);
+  const uploads = React.useRef<UploadedFile[]>(initial?.uploads ?? []);
   const [running, setRunning] = React.useState(!!conv.running);
   const [busy, setBusy] = React.useState(false);
   const [hasMore, setHasMore] = React.useState(false);
   const [loadingOlder, setLoadingOlder] = React.useState(false);
   const [error, setError] = React.useState("");
   const cursor = React.useRef(0);
+  const mutationEpoch = React.useRef(0);
   const end = React.useRef<HTMLDivElement>(null);
   const follow = React.useRef(true);
   const fetchDetail = React.useCallback((seq: number) => api.conversationMsgDetail(conv.id, seq), [conv.id]);
@@ -454,20 +461,27 @@ function ChatView({
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     let loaded = false;
+    let active = !!conv.running;
     async function poll() {
+      const epoch = mutationEpoch.current;
       try {
-        const jobs = await workflowsApi.delegations(conv.id).catch(() => null);
+        const [jobs, status, result] = await Promise.all([
+          workflowsApi.delegations(conv.id).catch(() => null),
+          workflowsApi.overview(conv.id).catch(() => null),
+          loaded ? api.conversationMessages(conv.id, cursor.current) : api.conversationHistory(conv.id, 0, 200),
+        ]);
+        if (!live || epoch !== mutationEpoch.current) return;
         if (live && jobs) setDelegations(jobs.items);
+        if (status) setOverview(status);
+        active = result.running;
         if (!loaded) {
-          const result = await api.conversationHistory(conv.id, 0, 200);
           if (!live) return;
           setMessages(result.items);
-          setHasMore(result.hasMore);
+          setHasMore("hasMore" in result && Boolean(result.hasMore));
           cursor.current = result.cursor;
           setRunning(result.running);
           loaded = true;
         } else {
-          const result = await api.conversationMessages(conv.id, cursor.current);
           if (!live) return;
           setMessages((items) => mergeActivities(items, result.items));
           cursor.current = Math.max(cursor.current, result.cursor);
@@ -477,7 +491,7 @@ function ChatView({
       } catch (e) {
         if (live) setError((e as Error).message);
       } finally {
-        if (live) timer = setTimeout(() => void poll(), 1000);
+        if (live) timer = setTimeout(() => void poll(), document.hidden ? 10000 : active ? 1000 : 3000);
       }
     }
     void poll();
@@ -509,13 +523,18 @@ function ChatView({
 
   async function send() {
     if ((!input.trim() && files.length === 0) || busy) return;
+    mutationEpoch.current++;
     setBusy(true);
     try {
-      const attachments = files.length > 0 ? (await api.chatUpload("session", String(conv.id), files)).attachments : [];
+      uploads.current = await uploadChatFiles(files, uploads.current, (batch) => api.chatUpload("session", String(conv.id), batch));
+      const attachments = uploads.current.map((item) => item.attachment);
       await api.sendConversationMessage(conv.id, input.trim() || "请分析已附加的题目文件。", attachments, running);
+      mutationEpoch.current++;
+      setOverview(null);
       setInput("");
       setFiles([]);
       setRunning(true);
+      uploads.current = [];
       follow.current = true;
     } catch (e) {
       toast.error((e as Error).message);
@@ -556,6 +575,7 @@ function ChatView({
         <span className={styles.missionRole}>{conv.agent_key}</span>
         <span className={styles.missionRun} data-live={running}>{running ? "● 运行中" : "待命"}</span>
       </div>
+      <ConversationOverview id={conv.id} overview={overview} />
       {error && (
         <p role="alert" className="px-6 py-2 text-sm text-destructive">
           记录加载失败：{error}
@@ -621,7 +641,7 @@ export default function ChatPage() {
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [selected, setSelected] = React.useState<Conversation | null>(null);
   const [conversations, setConversations] = React.useState<Conversation[]>([]);
-  const [pending, setPending] = React.useState<{ input?: string; attachments?: ChatAttachment[] }>();
+  const [pending, setPending] = React.useState<PendingChat>();
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [showHistory, setShowHistory] = React.useState(false);

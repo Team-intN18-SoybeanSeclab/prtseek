@@ -92,7 +92,7 @@ export default function WorkspacePage() {
   );
 
   React.useEffect(() => {
-    load("");
+    load(new URLSearchParams(window.location.search).get("path") ?? "");
   }, [load]);
 
   const crumbs = React.useMemo(() => {

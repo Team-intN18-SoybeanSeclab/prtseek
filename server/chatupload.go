@@ -3,10 +3,13 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Autumn-27/artex/db"
@@ -16,7 +19,7 @@ import (
 const maxChatUpload = 128 << 20 // 128 MiB
 
 // safeChatID guards the {id} path segment against traversal — task ids are numeric,
-// session ids are alnum/_/- ; anything with "/" or ".." is rejected.
+// session conversation IDs are resolved separately below.
 var safeChatID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // chatAttachment is one uploaded file as the frontend + agent see it. Path is relative
@@ -63,6 +66,23 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "非法 id")
 		return
 	}
+	if sub == "sessions" {
+		conversationID, err := strconv.ParseInt(strings.TrimPrefix(id, "conv-"), 10, 64)
+		if err != nil || conversationID <= 0 {
+			writeErr(w, 400, "非法会话 id")
+			return
+		}
+		if s.m.pg == nil {
+			writeErr(w, 503, "数据库不可用")
+			return
+		}
+		c, err := s.m.pg.GetConversation(conversationID)
+		if err != nil || c == nil {
+			writeErr(w, 404, "会话不存在")
+			return
+		}
+		id = s.convBusyKey(conversationID)
+	}
 	if taskScoped {
 		if s.m.ResolveTask(id) == nil {
 			writeErr(w, 404, "task not found")
@@ -84,6 +104,7 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "解析上传失败或超出大小限制: "+err.Error())
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	files := r.MultipartForm.File["file"]
 	if len(files) == 0 {
 		writeErr(w, 400, "缺少上传文件(表单字段 file)")
@@ -91,12 +112,13 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]chatAttachment, 0, len(files))
 	for _, hdr := range files {
-		name := filepath.Base(hdr.Filename) // strip any path component
-		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
-			continue
+		name := filepath.Base(hdr.Filename)
+		if !validUploadName(name) {
+			writeErr(w, 400, "非法附件名称")
+			return
 		}
-		dest := uniqueUploadPath(dir, name)
-		if err := saveUpload(hdr, dest); err != nil {
+		dest, err := saveUniqueChatUpload(dir, name, hdr)
+		if err != nil {
 			writeErr(w, 500, "保存失败: "+err.Error())
 			return
 		}
@@ -106,21 +128,103 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"attachments": out})
 }
 
-// uniqueUploadPath returns dir/name, or dir/name-1, dir/name-2… when it already exists,
-// so re-uploading the same filename never clobbers a prior attachment.
-func uniqueUploadPath(dir, name string) string {
-	dest := filepath.Join(dir, name)
-	if _, err := os.Stat(dest); os.IsNotExist(err) {
-		return dest
+func (s *Server) conversationWorkDir(id int64) string {
+	return filepath.Join(s.m.dir, "sessions", s.convBusyKey(id))
+}
+
+func validUploadName(name string) bool {
+	return filepath.IsLocal(name) && name != "." && !strings.ContainsAny(name, "/\\:\x00\r\n")
+}
+
+// O_EXCL reserves a filename before copying, including concurrent uploads.
+func saveUniqueChatUpload(dir, name string, hdr *multipart.FileHeader) (string, error) {
+	src, err := hdr.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	return copyUniqueUpload(dir, name, src)
+}
+
+func copyUniqueUpload(dir, name string, src io.Reader) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
 	}
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	for i := 1; ; i++ {
-		cand := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
-		if _, err := os.Stat(cand); os.IsNotExist(err) {
-			return cand
+	for i := 0; ; i++ {
+		candidate := name
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
 		}
+		dest := filepath.Join(dir, candidate)
+		out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, copyErr := io.Copy(out, src)
+		closeErr := out.Close()
+		if copyErr != nil || closeErr != nil {
+			_ = os.Remove(dest) // only this call's newly reserved file
+			if copyErr != nil {
+				return "", copyErr
+			}
+			return "", closeErr
+		}
+		return dest, nil
 	}
+}
+
+// Validate server-owned paths and metadata before accepting a message. Old
+// numeric-session uploads are copied on demand; original files are retained.
+func (s *Server) resolveConversationAttachments(id int64, in []chatAttachment) ([]chatAttachment, error) {
+	out := make([]chatAttachment, 0, len(in))
+	for _, a := range in {
+		name := strings.TrimPrefix(a.Path, "uploads/")
+		if a.Path != "uploads/"+name || !validUploadName(name) {
+			return nil, fmt.Errorf("非法附件路径，请重新选择附件")
+		}
+		base := s.conversationWorkDir(id)
+		root, err := os.OpenRoot(base)
+		var f *os.File
+		if err == nil {
+			f, err = root.Open(a.Path)
+			root.Close()
+		}
+		if os.IsNotExist(err) {
+			legacy, openErr := os.OpenRoot(filepath.Join(s.m.dir, "sessions", strconv.FormatInt(id, 10), "uploads"))
+			if openErr == nil {
+				old, oldErr := legacy.Open(name)
+				if oldErr == nil {
+					info, statErr := old.Stat()
+					if statErr == nil && info.Mode().IsRegular() {
+						var dest string
+						dest, err = copyUniqueUpload(filepath.Join(base, "uploads"), name, old)
+						if err == nil {
+							name = filepath.Base(dest)
+							a.Path = "uploads/" + name
+							f, err = os.Open(dest)
+						}
+					}
+					old.Close()
+				}
+				legacy.Close()
+			}
+		}
+		if err != nil || f == nil {
+			return nil, fmt.Errorf("附件 %s 不存在或无法读取，请重新上传", name)
+		}
+		info, err := f.Stat()
+		f.Close()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("附件 %s 不是可读取的文件", name)
+		}
+		out = append(out, chatAttachment{Name: name, Path: a.Path, Size: info.Size(), Abs: filepath.Join(base, a.Path)})
+	}
+	return out, nil
 }
 
 // composeAgentMessage appends an attachment manifest to the user's message so the agent

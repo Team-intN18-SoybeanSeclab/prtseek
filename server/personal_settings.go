@@ -185,7 +185,6 @@ func (s *Server) personalModelCapabilities(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	values := reasoningCandidates(cfg)
-	cfg.Proxy, cfg.SessionHeaderKey = "", ""
 	verified := false
 	if r.Method == http.MethodPost {
 		if !validEffort(effort) {
@@ -240,7 +239,6 @@ func (s *Server) validatePersonalEffort(c *db.Conversation, effort string) error
 func (s *Server) personalProfileConfig(c *db.Conversation) (agent.Config, int64, bool) {
 	if c.LLMProfileID != nil {
 		cfg, ok := s.loadProfileConfig(*c.LLMProfileID)
-		cfg.Proxy, cfg.SessionHeaderKey = "", ""
 		return cfg, *c.LLMProfileID, ok
 	}
 	// Legacy specialised conversations keep their existing default role binding.
@@ -249,18 +247,15 @@ func (s *Server) personalProfileConfig(c *db.Conversation) (agent.Config, int64,
 	if c.AgentKey != "personal" {
 		if id := s.effectiveProfileForAgent(c.AgentKey, nil); id != nil {
 			if cfg, ok := s.loadProfileConfig(*id); ok {
-				cfg.Proxy, cfg.SessionHeaderKey = "", ""
 				return cfg, *id, true
 			}
 		}
 	}
 	if p, _ := s.m.pg.ActiveProfile(); p != nil {
 		cfg, ok := s.loadProfileConfig(p.ID)
-		cfg.Proxy, cfg.SessionHeaderKey = "", ""
 		return cfg, p.ID, ok
 	}
 	_, cfg, ok := s.globalProvider()
-	cfg.Proxy, cfg.SessionHeaderKey = "", ""
 	return cfg, 0, ok
 }
 
@@ -357,6 +352,7 @@ type personalRunSnapshot struct {
 	MaxTokens         int               `json:"max_tokens"`
 	MaxTokensField    string            `json:"max_tokens_field"`
 	CredentialBinding string            `json:"credential_binding"`
+	ConnectionBinding string            `json:"connection_binding,omitempty"`
 	RatePerSecond     float64           `json:"rate_per_second"`
 	RatePerMinute     float64           `json:"rate_per_minute"`
 	Retry             agent.RetryConfig `json:"retry"`
@@ -372,7 +368,12 @@ func makePersonalRunSnapshot(cfg agent.Config, id int64, effort, language string
 	if effort == "" {
 		effort = cfg.ReasoningEffort
 	}
-	return personalRunSnapshot{ProfileID: id, Model: cfg.Model, BaseURL: cfg.BaseURL, Format: string(cfg.Format), ReasoningEffort: effort, ThinkingType: cfg.ThinkingType, ResponseLanguage: language, Streaming: cfg.Stream, ContextWindowK: cfg.ContextWindowK, MaxTokens: cfg.MaxTokens, MaxTokensField: cfg.MaxTokensField, CredentialBinding: personalCredentialBinding(cfg), RatePerSecond: cfg.RatePerSecond, RatePerMinute: cfg.RatePerMinute, Retry: cfg.Retry, Version: 3}
+	return personalRunSnapshot{ProfileID: id, Model: cfg.Model, BaseURL: cfg.BaseURL, Format: string(cfg.Format), ReasoningEffort: effort, ThinkingType: cfg.ThinkingType, ResponseLanguage: language, Streaming: cfg.Stream, ContextWindowK: cfg.ContextWindowK, MaxTokens: cfg.MaxTokens, MaxTokensField: cfg.MaxTokensField, CredentialBinding: personalCredentialBinding(cfg), ConnectionBinding: personalConnectionBinding(cfg), RatePerSecond: cfg.RatePerSecond, RatePerMinute: cfg.RatePerMinute, Retry: cfg.Retry, Version: 4}
+}
+
+func personalConnectionBinding(cfg agent.Config) string {
+	h := sha256.Sum256([]byte(cfg.Proxy + "\x00" + cfg.SessionHeaderKey))
+	return hex.EncodeToString(h[:])
 }
 
 func (s *Server) personalBackgroundSnapshot(c *db.Conversation) (json.RawMessage, error) {
@@ -424,6 +425,12 @@ func (s *Server) personalTaskConfig(taskID string) (agent.Config, bool, error) {
 	if snap.CredentialBinding == "" || snap.CredentialBinding != personalCredentialBinding(cfg) {
 		return agent.Config{}, true, fmt.Errorf("后台任务的模型凭据或服务地址已改变，请暂停并重新选择模型后继续")
 	}
+	if snap.Version >= 4 && snap.ConnectionBinding != personalConnectionBinding(cfg) {
+		return agent.Config{}, true, fmt.Errorf("后台任务连接参数已改变，请暂停并重新选择模型后继续")
+	}
+	if snap.Version < 4 {
+		cfg.Proxy, cfg.SessionHeaderKey = "", ""
+	}
 	cfg.Model = snap.Model
 	cfg.BaseURL = snap.BaseURL
 	cfg.Format = llm.Format(snap.Format)
@@ -439,6 +446,5 @@ func (s *Server) personalTaskConfig(taskID string) (agent.Config, bool, error) {
 	cfg.MaxTokensField = snap.MaxTokensField
 	cfg.RatePerSecond, cfg.RatePerMinute = snap.RatePerSecond, snap.RatePerMinute
 	cfg.Retry = snap.Retry
-	cfg.Proxy, cfg.SessionHeaderKey = "", ""
 	return cfg, true, nil
 }

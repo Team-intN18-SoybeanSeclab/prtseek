@@ -10,6 +10,9 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +21,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Autumn-27/artex/config"
@@ -26,6 +30,7 @@ import (
 	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/llm"
 	acperm "github.com/Autumn-27/norma/permission"
+	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
 )
 
@@ -495,6 +500,16 @@ func clipBody(s string) string {
 // endpoint/key actually work. Returns the round-trip latency and the model's
 // reply text.
 func TestConnection(ctx context.Context, c Config) (time.Duration, string, error) {
+	return testConnection(ctx, c, false)
+}
+
+// TestAgentConnection verifies a real tool-call/result round trip. The nonce
+// is generated on the host and only revealed by an inert in-memory tool.
+func TestAgentConnection(ctx context.Context, c Config) (time.Duration, string, error) {
+	return testConnection(ctx, c, true)
+}
+
+func testConnection(ctx context.Context, c Config, testTools bool) (time.Duration, string, error) {
 	prov, err := c.NewProvider()
 	if err != nil {
 		return 0, "", err
@@ -518,14 +533,37 @@ func TestConnection(ctx context.Context, c Config) (time.Duration, string, error
 	// 就撞到输出上限(finish=length)、被截断,连接测试虽仍算通(err=nil)但显示成
 	// "已中断/length/resume" 一团糟。给足预算让它把 OK 干净吐完(finish=stop)。
 	// EscalateMaxTokens 保持 false:不因截断而抬额重试,避免 resume 循环空烧。
+	tools := []actool.CoreTool{}
+	system, prompt, turns := "你是连接测试。直接输出两个字符 OK 即可，不要思考、不要解释、不要别的。", "ping", 1
+	var called atomic.Bool
+	nonce := ""
+	if testTools {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return 0, "", err
+		}
+		nonce = "probe-" + hex.EncodeToString(random[:])
+		tools = append(tools, actool.Build(actool.Spec{Name: "connection_probe", Description: "Return the verification receipt. No side effects.", Schema: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}, Permissions: func(context.Context, json.RawMessage, acperm.Context) acperm.Decision { return acperm.Allowed() }, Run: func(context.Context, json.RawMessage, *actool.ToolContext) (actool.Result, error) {
+			called.Store(true)
+			return actool.Result{Content: []llm.ContentBlock{llm.TextBlock(nonce)}}, nil
+		}}))
+		system = "这是工具能力测试。必须调用 connection_probe 一次，再原样回复工具返回的 receipt。不要猜测，不要只回复 OK。"
+		prompt, turns = "Call connection_probe, then repeat its exact receipt.", 3
+	}
+	maxTokens := 8192
+	if c.MaxTokens > 0 {
+		maxTokens = min(maxTokens, c.MaxTokens)
+	}
 	reply, err := agentcore.Run(ctx, agentcore.Options{
-		Provider:       prov,
-		SystemPrompt:   []string{"你是连接测试。直接输出两个字符 OK 即可，不要思考、不要解释、不要别的。"},
-		PermissionMode: acperm.ModeBypass,
-		MaxTurns:       1,
-		MaxTokens:      8192,
-		NonStreaming:   !c.Stream, // 用该 profile 的真实收发模式做连接测试
-	}, "ping")
+		Provider:               prov,
+		SystemPrompt:           []string{system},
+		Tools:                  tools,
+		DisableBackgroundTasks: true,
+		PermissionMode:         acperm.ModeBypass,
+		MaxTurns:               turns,
+		MaxTokens:              maxTokens,
+		NonStreaming:           !c.Stream, // 用该 profile 的真实收发模式做连接测试
+	}, prompt)
 	lat := time.Since(start)
 	if err != nil {
 		return lat, "", err
@@ -536,6 +574,9 @@ func TestConnection(ctx context.Context, c Config) (time.Duration, string, error
 	reply = strings.TrimSpace(reply)
 	if reply == "" {
 		return lat, "", fmt.Errorf("模型无回复内容（请求已通，但未返回任何文本）")
+	}
+	if testTools && (!called.Load() || !strings.Contains(reply, nonce)) {
+		return lat, "", fmt.Errorf("模型文本连接可用，但工具调用/结果回传未通过验证；请检查接口工具能力")
 	}
 	return lat, reply, nil
 }

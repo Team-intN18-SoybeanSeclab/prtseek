@@ -7,7 +7,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -516,6 +515,11 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 		writeErr(w, 400, "消息不能为空")
 		return
 	}
+	req.Attachments, err = s.resolveConversationAttachments(c.ID, req.Attachments)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	agentMessage, ok := s.prepareChatMentionMessage(w, msg)
 	if !ok {
 		return
@@ -551,7 +555,11 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 		ua.Detail = msg
 	}
 	if _, err := pg.AppendConvActivity(c.ID, ua); err != nil {
-		log.Printf("[conv %d] append user msg failed: %v", c.ID, err)
+		s.chatMu.Lock()
+		delete(s.chatBusy, busyKey)
+		s.chatMu.Unlock()
+		writeErr(w, 500, "消息保存失败，请重试")
+		return
 	}
 	if c.Title == "" || c.Title == "新对话" {
 		title := firstLine(msg, 40)
@@ -566,7 +574,7 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	// Read/Bash tools. baseDir = the agent's per-session CWD (<workDir>/sessions/
 	// conv-<id>/), matching chatUpload's landing dir and agent/chat.go's sessionWorkDir
 	// — busyKey == convBusyKey(c.ID) == "conv-<id>" == that session id.
-	baseDir := filepath.Join(s.m.dir, "sessions", busyKey)
+	baseDir := s.conversationWorkDir(c.ID)
 	s.runConversation(c, composeAgentMessage(agentMessage, req.Attachments, baseDir), busyKey, msg)
 	writeJSON(w, 202, map[string]any{"status": "accepted"})
 }
@@ -746,6 +754,27 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	// On a manual stop ctx is cancelled; Chat already emits a clean "已手动停止"
 	// step, so skip the raw-error entry — only surface genuine failures.
 	ca = ca.WithExtraTools(s.conversationTools(c))
+	if isDefaultCTFAgent(c.AgentKey) {
+		var workflow *ctfWorkflowRun
+		ctx, workflow = s.beginCTFWorkflow(ctx, c)
+		if err := s.startCTFExecution(c.ID, c.ID); err != nil {
+			s.closeCTFWorkflow(workflow)
+			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Kind: "text", IsError: true, Summary: "无法保存运行状态，请重试"})
+			return
+		}
+		defer func() {
+			state := finishStatus
+			if ctx.Err() != nil {
+				state = "cancelled"
+			}
+			if ctx.Err() == context.DeadlineExceeded {
+				state = "timed_out"
+			}
+			s.closeCTFWorkflow(workflow)
+			s.finishCTFExecution(c.ID, state)
+		}()
+		ca = ca.WithCompletionCheck(func() string { return workflow.completionCheck(c.ID) })
+	}
 	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
 		finishReason = err.Error()
 		if ctx.Err() == nil {

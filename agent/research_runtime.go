@@ -162,7 +162,7 @@ func researchFingerprint(name string, input []byte) string {
 func researchPollingTool(name string) bool {
 	n := strings.ToLower(name)
 	switch n {
-	case "sleep", "taskoutput", "monitor", "status", "get_status", "get_worker_status", "get_worker_output", "get_worker_trace", "list_workers", "list_worker_traces":
+	case "sleep", "taskoutput", "monitor", "status", "get_status", "get_worker_status", "get_worker_output", "get_worker_trace", "list_workers", "list_worker_traces", "wait_agents":
 		return true
 	}
 	return strings.HasPrefix(n, "research_")

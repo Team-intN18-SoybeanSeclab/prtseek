@@ -23,19 +23,26 @@ import (
 // LS/Glob/Grep) plus whatever skills/MCP the key is made visible; NO pentest
 // graph/task context is injected (that stays exclusive to MainAgent).
 type ChatAgent struct {
-	prov           llm.Provider
-	model          string
-	workDir        string
-	tx             *transcript.Store
-	window         int
-	proxyAddr      string
-	proxyCACert    string
-	webSearch      WebSearchOpts
-	guard          *guard.Guard // optional; nil disables intercept hooks for chat
-	nonStreamingFn func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn   func() bool  // resolver: use experimental noa compaction? (nil = off)
-	maxTokensFn    func() int   // resolver: per-reply output cap (nil/0 = send no cap)
-	extraToolsFn   func(context.Context, string) []actool.CoreTool
+	prov            llm.Provider
+	model           string
+	workDir         string
+	tx              *transcript.Store
+	window          int
+	proxyAddr       string
+	proxyCACert     string
+	webSearch       WebSearchOpts
+	guard           *guard.Guard // optional; nil disables intercept hooks for chat
+	nonStreamingFn  func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
+	noaEnabledFn    func() bool  // resolver: use experimental noa compaction? (nil = off)
+	maxTokensFn     func() int   // resolver: per-reply output cap (nil/0 = send no cap)
+	extraToolsFn    func(context.Context, string) []actool.CoreTool
+	completionCheck func() string
+}
+
+func (c *ChatAgent) WithCompletionCheck(check func() string) *ChatAgent {
+	copy := *c
+	copy.completionCheck = check
+	return &copy
 }
 
 func (c *ChatAgent) WithExtraTools(fn func(context.Context, string) []actool.CoreTool) *ChatAgent {
@@ -93,13 +100,14 @@ func chatWorkDirSpec(workDir string) string {
 func chatSystem(agentKey, dataDir, workDir string) string {
 	prompt := renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()})
 	if agentKey == "triage" {
-		prompt += "\n\n协作约定：材料足够时应调用 delegate_agent 将结构化材料清单交给 command；缺少题目或附件时先明确请求补充，不能只用文字声称已经分工。"
+		prompt += "\n\n协作约定：材料足够且几步可解决时直接 delegate_agent 给 solver；需要多个互补方向时再交给 command。缺少题目或附件时明确缺口，不能只用文字声称已经分工。"
 	}
 	if agentKey == "command" {
-		prompt += "\n\n协作约定：使用 delegate_agents 一次派发 2 至 6 个独立 solver 子任务。至少区分主线分析与独立证据复核，避免重复工作；给出材料、目标、边界、产物路径和验收标准。等待真实返回，区分失败、取消和完成，再汇总结论。收敛后把可复现结论交给 writeup；不能假称未实际发生的派发。"
+		prompt += "\n\n协作约定：按复杂度使用 delegate_agents 启动 1 至 6 个互补 solver；简单题只需一个。此工具立即返回编号，使用 wait_agents 等待任一结果，及时利用突破口、用 cancel_agent 停止无价值分支，并收取取消后的结果。每项任务写清材料、目标、边界、产物和验收标准。最多同时8个、单轮总计24个子任务、深度4层，整轮共享200次模型调用；不要为用满并行度而重复分工。收敛后按需要交给 writeup。"
 	}
 	if agentKey == "triage" || agentKey == "command" || agentKey == "solver" || agentKey == "writeup" {
 		prompt += "\n\n" + CTFEvidencePriority + "\n\n" + ctfRoleMethod(agentKey)
+		prompt += "\n\n交付前调用 report_outcome：明确验收条件、目标状态（unverified/partial/blocked/verified）、结论、证据编号及产物相对路径。verified 必须说明实际验证方法并引用成功工具证据；候选 flag 或只有推断时只能用 partial/unverified。引用子任务证据时携带真实 conversation_id。运行正常结束不代表目标已达成。"
 	}
 	return prompt + chatWorkDirSpec(workDir)
 }
@@ -165,7 +173,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 
 	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir)+responseLanguageBlock(ctx), def)
 	opts := agentcore.Options{
-		Provider:               c.prov,
+		Provider:               budgetProvider(ctx, c.prov),
 		SystemPrompt:           system,
 		DynamicBoundary:        boundary,
 		Tools:                  tools,
@@ -222,6 +230,9 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		return "", err
 	}
 	personalSessionOptions(ctx, &opts)
+	if c.completionCheck != nil {
+		opts.Hooks = &completionCheckHooks{HookRunner: opts.Hooks, check: c.completionCheck}
+	}
 	s := agentcore.NewSession(opts)
 	defer s.Close()
 	// reload prior conversation so the agent has context across turns (each Chat is

@@ -35,13 +35,23 @@ export function ModelEditor({
   const [busy, setBusy] = React.useState("");
   const [error, setError] = React.useState("");
   const [tested, setTested] = React.useState("");
+  const [advanced, setAdvanced] = React.useState({
+    proxy: profile?.proxy ?? "",
+    session_header_key: profile?.session_header_key ?? "",
+    reasoning_effort: profile?.reasoning_effort ?? "",
+    thinking_type: profile?.thinking_type ?? "",
+    streaming: profile?.streaming ?? true,
+    context_window_k: profile?.context_window_k ?? 0,
+    max_tokens: profile?.max_tokens ?? 0,
+    max_tokens_field: profile?.max_tokens_field ?? "",
+  });
   const id = profile ? Number(profile.id) : undefined;
 
   async function loadModels() {
     setBusy("models");
     setError("");
     try {
-      const result = await api.fetchLLMModels(format, baseUrl.trim(), key, "", id);
+      const result = await api.fetchLLMModels(format, baseUrl.trim(), key, advanced.proxy, id);
       if (!result.ok || !result.models?.length)
         throw new Error(result.error || "接口没有返回模型列表，请手动填写模型 ID。");
       const complete = [...new Set(result.models)].sort((a, b) => a.localeCompare(b));
@@ -62,9 +72,10 @@ export function ModelEditor({
     }
     setBusy("save");
     try {
-      const result = await api.testLLM(format, model.trim(), baseUrl.trim(), key, "", "", "", id, true, "");
+      const result = await api.testLLM(format, model.trim(), baseUrl.trim(), key, advanced.proxy, advanced.thinking_type, advanced.reasoning_effort, id, advanced.streaming, advanced.session_header_key, true, { max_tokens: advanced.max_tokens, max_tokens_field: advanced.max_tokens_field });
       if (!result.ok) throw new Error(result.error || "模型未返回有效回复");
-      setTested(`连接成功 · ${result.latency_ms ?? "—"} ms${result.reply ? ` · ${result.reply}` : ""}`);
+      if (!result.tools_verified) throw new Error("工具调用能力尚未通过验证。");
+      setTested(`连接与工具往返已验证 · ${result.latency_ms ?? "—"} ms`);
       const saved = await api.saveLLMProfile({
         ...(profile ? { ...profile, id } : {}),
         name: name.trim() || model.trim(),
@@ -72,13 +83,8 @@ export function ModelEditor({
         base_url: baseUrl.trim(),
         api_key: key,
         model: model.trim(),
-        // Personal mode deliberately does not retain invisible request modifiers.
-        proxy: "",
-        session_header_key: "",
-        reasoning_effort: "",
-        thinking_type: "",
-        streaming: true,
-        pool_exclude: true,
+        ...advanced,
+        pool_exclude: profile?.pool_exclude ?? true,
       });
       if (makeDefault || initial) await api.activateLLMProfile(String(saved.id));
       toast.success("模型配置已验证并保存");
@@ -224,11 +230,23 @@ export function ModelEditor({
           设为默认模型
         </label>
       )}
-      {profile && (profile.proxy || profile.session_header_key) && (
-        <p className="text-sm text-amber-600">
-          此旧配置含额外连接参数。保存为基本配置会移除这些参数，请以本次连接测试结果为准。
-        </p>
-      )}
+      <details className="rounded-md border p-3">
+        <summary className="cursor-pointer text-sm">高级连接与模型参数</summary>
+        <div className="mt-3 space-y-3">
+          <p className="text-xs text-muted-foreground">未修改的参数会保留。保存前验证真实工具调用和结果回传。</p>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={advanced.streaming} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, streaming: e.target.checked })} />使用流式响应</label>
+          <div className="space-y-1"><Label htmlFor="model-proxy">连接代理</Label><Input id="model-proxy" value={advanced.proxy} disabled={!!busy} placeholder="http://127.0.0.1:7890" onChange={(e) => setAdvanced({ ...advanced, proxy: e.target.value })} /></div>
+          <div className="space-y-1"><Label htmlFor="model-session-header">自定义会话头名称</Label><Input id="model-session-header" value={advanced.session_header_key} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, session_header_key: e.target.value })} /></div>
+          <div className="space-y-1"><Label htmlFor="model-effort">默认思考强度</Label><Input id="model-effort" value={advanced.reasoning_effort} disabled={!!busy} placeholder="留空使用接口默认值" onChange={(e) => setAdvanced({ ...advanced, reasoning_effort: e.target.value })} /></div>
+          <div className="space-y-1"><Label htmlFor="model-thinking">思考模式</Label><NativeSelect id="model-thinking" value={advanced.thinking_type} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, thinking_type: e.target.value })}><option value="">接口默认</option><option value="enabled">开启</option><option value="disabled">关闭</option></NativeSelect></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><Label htmlFor="model-context">上下文容量（K Token）</Label><Input id="model-context" type="number" min={0} value={advanced.context_window_k} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, context_window_k: Math.max(0, Number(e.target.value)) })} /></div>
+            <div className="space-y-1"><Label htmlFor="model-output">输出上限（Token）</Label><Input id="model-output" type="number" min={0} value={advanced.max_tokens} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, max_tokens: Math.max(0, Number(e.target.value)) })} /></div>
+          </div>
+          <p className="text-xs text-muted-foreground">容量 0 使用应用默认值；输出上限 0 使用接口默认值。</p>
+          <div className="space-y-1"><Label htmlFor="model-output-field">输出上限字段</Label><NativeSelect id="model-output-field" value={advanced.max_tokens_field} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, max_tokens_field: e.target.value })}><option value="">max_tokens（默认）</option><option value="max_completion_tokens">max_completion_tokens</option></NativeSelect></div>
+        </div>
+      </details>
       {error && (
         <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive whitespace-pre-wrap">
           {error}

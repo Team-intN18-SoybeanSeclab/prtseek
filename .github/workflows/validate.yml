@@ -24,8 +24,9 @@ jobs:
       # legacy full suite includes platform-dependent shell-analysis fixtures
       # and background task timing tests; it is not the release smoke gate.
       - run: go test ./... -run '^$' -timeout=180s
-      - run: go test ./agent ./server -run '^(TestCTFRoleMethodsStayDistinct|TestResearchRuntimeLinkedTaskRoot|TestWorkflowEntryDefaultsToTriageAndKeepsSelectedAgent|TestCTFDelegationToolsAreExposed|TestReserveConversationTurn.*)$' -count=1 -timeout=180s
+      - run: go test ./agent ./server -run '^(TestCTF.*|TestAgentConnection.*|TestResearchRuntimeLinkedTaskRoot|TestWorkflowEntryDefaultsToTriageAndKeepsSelectedAgent|TestDelegatedConversationPersistsResult|TestConversationDelegationsIncludesNestedWorkers|TestReserveConversationTurn.*)$' -count=1 -timeout=180s
       - run: go test ./db ./config -count=1 -timeout=180s
+      - run: python scripts/eval-ctf.py --self-test
       - run: npm ci
         working-directory: web
       - run: npm test
