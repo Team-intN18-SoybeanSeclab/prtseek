@@ -2,6 +2,8 @@
 
 一个极简的CTF Agent。
 
+**[更新日志](CHANGELOG.md)**
+
 本项目基于 [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX) 二次开发，原始项目来自 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)。保留 Go 模块路径 `github.com/Autumn-27/artex` 和 AGPL-3.0 许可证。
 
 ## 更新日志
