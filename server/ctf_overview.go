@@ -16,17 +16,21 @@ import (
 )
 
 type ctfOverview struct {
-	State          string       `json:"state"`
-	StartedMS      int64        `json:"started_ms"`
-	FinishedMS     int64        `json:"finished_ms"`
-	ElapsedMS      int64        `json:"elapsed_ms"`
-	ModelCalls     int64        `json:"model_calls"`
-	ModelCallLimit int          `json:"model_call_limit"`
-	InputTokens    int64        `json:"input_tokens"`
-	OutputTokens   int64        `json:"output_tokens"`
-	ActiveChildren int          `json:"active_children"`
-	Latest         *ActivityDTO `json:"latest,omitempty"`
-	Outcome        ctfOutcome   `json:"outcome"`
+	State            string       `json:"state"`
+	StartedMS        int64        `json:"started_ms"`
+	FinishedMS       int64        `json:"finished_ms"`
+	ElapsedMS        int64        `json:"elapsed_ms"`
+	ModelCalls       int64        `json:"model_calls"`
+	ModelCallLimit   int          `json:"model_call_limit"`
+	InputTokens      int64        `json:"input_tokens"`
+	OutputTokens     int64        `json:"output_tokens"`
+	CacheReadTokens  int64        `json:"cache_read_tokens"`
+	CacheWriteTokens int64        `json:"cache_write_tokens"`
+	TurnID           int64        `json:"turn_id"`
+	EndReason        string       `json:"end_reason,omitempty"`
+	ActiveChildren   int          `json:"active_children"`
+	Latest           *ActivityDTO `json:"latest,omitempty"`
+	Outcome          ctfOutcome   `json:"outcome"`
 }
 
 func (s *Server) conversationOverview(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +40,7 @@ func (s *Server) conversationOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	view := ctfOverview{State: "idle", ModelCallLimit: ctfMaxModelCalls, Outcome: s.readCTFOutcome(c.ID)}
 	_ = s.m.pg.QueryRow(`SELECT state,started_ms,finished_ms,model_calls FROM conversation_executions WHERE conversation_id=$1`, c.ID).Scan(&view.State, &view.StartedMS, &view.FinishedMS, &view.ModelCalls)
+	_ = s.m.pg.QueryRow(`SELECT id,reason,state,started_ms,finished_ms FROM conversation_turns WHERE conversation_id=$1 ORDER BY id DESC LIMIT 1`, c.ID).Scan(&view.TurnID, &view.EndReason, &view.State, &view.StartedMS, &view.FinishedMS)
 	if view.StartedMS > 0 {
 		end := view.FinishedMS
 		if end == 0 {
@@ -49,12 +54,9 @@ func (s *Server) conversationOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// One aggregate query for the entire task tree; avoid per-child polling queries.
-	err = s.m.pg.QueryRow(ctfTreeQuery+`
-	 SELECT COALESCE(SUM(a.input_tokens),0),COALESCE(SUM(a.output_tokens),0)
-	 FROM conversation_activities a JOIN tree ON tree.id=a.conversation_id
-	 WHERE a.kind='result' OR (a.kind='usage'
-	 AND a.id=(SELECT MAX(u.id) FROM conversation_activities u WHERE u.conversation_id=a.conversation_id AND u.kind='usage')
-	 AND a.id>COALESCE((SELECT MAX(z.id) FROM conversation_activities z WHERE z.conversation_id=a.conversation_id AND z.kind='result'),0))`, c.ID).Scan(&view.InputTokens, &view.OutputTokens)
+	err = s.m.pg.QueryRow(ctfTreeQuery+`, `+db.ConversationUsageCTE+`
+	 SELECT COALESCE(SUM(a.input_tokens),0),COALESCE(SUM(a.output_tokens),0),COALESCE(SUM(a.cache_read_tokens),0),COALESCE(SUM(a.cache_write_tokens),0)
+	 FROM conversation_usage a JOIN tree ON tree.id=a.conversation_id`, c.ID).Scan(&view.InputTokens, &view.OutputTokens, &view.CacheReadTokens, &view.CacheWriteTokens)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -140,7 +142,7 @@ func (s *Server) conversationFiles(w http.ResponseWriter, r *http.Request) {
 					}
 					return nil
 				}
-				if strings.HasPrefix(path, ".research/") && !strings.HasPrefix(path, ".research/evidence/") {
+				if strings.HasPrefix(path, ".research/") && !strings.HasPrefix(path, ".research/evidence/") && !strings.HasPrefix(path, ".research/http/") && !strings.HasPrefix(path, ".research/experiments/") {
 					return nil
 				}
 				info, err := d.Info()
@@ -158,7 +160,7 @@ func (s *Server) conversationFiles(w http.ResponseWriter, r *http.Request) {
 				return nil
 			}
 			if evidence {
-				for _, path := range []string{".research/evidence", "cmd-output"} {
+				for _, path := range []string{".research/experiments", ".research/evidence", ".research/http", "cmd-output"} {
 					_ = fs.WalkDir(root.FS(), path, walk)
 					if truncated {
 						break

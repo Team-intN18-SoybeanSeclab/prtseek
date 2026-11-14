@@ -775,7 +775,7 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		}()
 		ca = ca.WithCompletionCheck(func() string { return workflow.completionCheck(c.ID) })
 	}
-	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
+	if _, err := s.runMeteredChat(ctx, ca, c, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
 		finishReason = err.Error()
 		if ctx.Err() == nil {
 			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true,

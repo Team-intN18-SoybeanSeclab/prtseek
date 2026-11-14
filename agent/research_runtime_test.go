@@ -391,6 +391,7 @@ func TestResearchRuntimeProductionChat(t *testing.T) {
 	ca.SetNonStreaming(func() bool { return true })
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
+	ctx = WithModelObserver(ctx, &ModelObserver{Started: func() {}, Usage: func(llm.Usage) {}})
 	if _, err := ca.Chat(ctx, "personal", "fixture-research", "核对本地 API 响应证据", 3, 15*time.Second, false, nil); err != nil {
 		t.Fatal(err)
 	}

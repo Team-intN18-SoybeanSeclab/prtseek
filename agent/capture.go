@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"iter"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,6 +39,12 @@ func captureRun(ctx context.Context, opts agentcore.Options, input string, emit 
 func captureRunSession(ctx context.Context, s *agentcore.Session, input string, emit func(db.Activity)) (string, harness.TerminalReason, error) {
 	ctx, auditTrace := intercept.WithTrace(ctx, input, approvalHistory(s.Messages()))
 	defer auditTrace.Finish()
+	return captureEvents(ctx, s.Prompt(ctx, input), emit, auditTrace)
+}
+
+var ErrIncompleteRun = errors.New("执行流缺少有效终止事件，已保留收到的内容与用量")
+
+func captureEvents(ctx context.Context, events iter.Seq2[harness.Event, error], emit func(db.Activity), auditTrace *intercept.Trace) (string, harness.TerminalReason, error) {
 	var reason harness.TerminalReason
 	rec := func(r db.Activity) {
 		if r.Kind == "text" || r.Kind == "tool_result" {
@@ -77,13 +85,19 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 
 	var finalText string
 	var rerr error
-	for ev, err := range s.Prompt(ctx, input) {
+	terminalSeen := false
+	for ev, err := range events {
 		if err != nil {
 			flush()
 			if ctx.Err() != nil { // engine/user cancellation, not a provider failure
+				reason = harness.ReasonAbortedStreaming
 				sum, detail := terminalText(ctx, &harness.Terminal{Reason: reason, Err: ctx.Err()}, lastTool)
 				rec(activityWithUsage(db.Activity{Kind: "result", Summary: firstLine(sum, 400), Detail: detail}, lastUsage))
 				return finalText, reason, ctx.Err()
+			}
+			reason = harness.ReasonModelError
+			if errors.Is(err, ErrIncompleteRun) {
+				reason = "incomplete_stream"
 			}
 			rec(activityWithUsage(db.Activity{Kind: "result", IsError: true, Summary: "执行出错: " + err.Error(), Detail: err.Error()}, lastUsage))
 			return finalText, reason, err
@@ -128,11 +142,15 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 			}
 		case harness.KindResult:
 			if ev.Terminal != nil {
+				terminalSeen = true
 				if ev.Terminal.Reason != harness.ReasonAbortedStreaming {
 					sidequestion.Finish(ctx, ev.Terminal.Messages)
 				}
 				finalText = ev.Terminal.Text
 				reason = ev.Terminal.Reason
+				if errors.Is(ev.Terminal.Err, ErrIncompleteRun) {
+					reason = "incomplete_stream"
+				}
 				// the buffered tail text usually equals Terminal.Text (final answer);
 				// drop it to avoid a duplicate record, the result row carries it.
 				if tkind == "text" && strings.TrimSpace(tbuf.String()) == strings.TrimSpace(ev.Terminal.Text) {
@@ -156,6 +174,15 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 		}
 	}
 	flush() // safety: any unflushed text if the stream ended without KindResult
+	if !terminalSeen {
+		rerr = ErrIncompleteRun
+		reason = "incomplete_stream"
+		if ctx.Err() != nil {
+			rerr = ctx.Err()
+			reason = harness.ReasonAbortedStreaming
+		}
+		rec(activityWithUsage(db.Activity{Kind: "result", IsError: true, Summary: rerr.Error(), Detail: rerr.Error()}, lastUsage))
+	}
 	return finalText, reason, rerr
 }
 

@@ -109,6 +109,9 @@ func Open(path string) (*DB, error) {
 	if err = d.EnsureLLMUsageTable(); err != nil {
 		return fail(err)
 	}
+	if err = d.EnsureConversationTurns(); err != nil {
+		return fail(err)
+	}
 	if err = d.seedBuiltins(); err != nil {
 		return fail(err)
 	}

@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// ConvTokenSummary is one conversation's token total (sum of its kind='result'
-// rows) with its profile + created_at, used to merge conversation usage into the
+// ConvTokenSummary is one conversation's token total across interrupted and
+// completed turns, with its profile + created_at, used to merge usage into the
 // dashboard's per-profile / daily token stats (which otherwise cover only tasks).
 type ConvTokenSummary struct {
 	LLMProfileID     *int64 `json:"llm_profile_id"`
@@ -17,15 +17,14 @@ type ConvTokenSummary struct {
 	CacheWriteTokens int    `json:"cache_write_tokens"`
 }
 
-// ConversationTokenSummaries returns one row per conversation with its summed
-// result-row token usage (0 for conversations with no completed run yet).
+// ConversationTokenSummaries includes live metered usage and legacy snapshots.
 func (d *DB) ConversationTokenSummaries() ([]ConvTokenSummary, error) {
-	rows, err := d.Query(`
+	rows, err := d.Query(`WITH ` + ConversationUsageCTE + `
 SELECT c.llm_profile_id, c.created_at,
        COALESCE(sum(ca.input_tokens),0), COALESCE(sum(ca.output_tokens),0),
        COALESCE(sum(ca.cache_read_tokens),0), COALESCE(sum(ca.cache_write_tokens),0)
 FROM conversations c
-LEFT JOIN conversation_activities ca ON ca.conversation_id = c.id AND ca.kind = 'result'
+LEFT JOIN conversation_usage ca ON ca.conversation_id = c.id
 GROUP BY c.id`)
 	if err != nil {
 		return nil, err

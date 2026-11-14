@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -92,7 +93,7 @@ func (c *ChatAgent) SetGuard(g *guard.Guard) { c.guard = g }
 // agent's system prompt. Mirrors artifactSpec but without pentest-specific
 // wording ("payload", "抓响应体") that would be odd in a general assistant.
 func chatWorkDirSpec(workDir string) string {
-	return "\n\n**文件输出规约**：需要写文件时，一律写到工作目录 " + workDir + "（这是默认 CWD，相对路径即落在这里，也可用该绝对路径）——不要写 /tmp 或其他绝对路径。"
+	return "\n\n**文件输出规约**：需要写文件时，一律写到工作目录 " + workDir + "（这是默认 CWD，相对路径即落在这里，也可用该绝对路径）——不要写 /tmp 或其他绝对路径。\n" + shellEnvironment()
 }
 
 // chatSystem renders the DB-managed prompt body for agentKey. Custom agents have
@@ -107,6 +108,7 @@ func chatSystem(agentKey, dataDir, workDir string) string {
 	}
 	if agentKey == "triage" || agentKey == "command" || agentKey == "solver" || agentKey == "writeup" {
 		prompt += "\n\n" + CTFEvidencePriority + "\n\n" + ctfRoleMethod(agentKey)
+		prompt += "\n实验前用 research_experiment 记录假设、改变变量和预期，使用唯一目录/远程产物前缀，并先记录基线。只读到答案用 verification_level=observed；独立复现用 reproduced，提供 experiment_id、baseline_evidence、result_evidence；平台接受用 accepted 并提供 acceptance_evidence。重复读取旧产物不能证明从初始状态独立复现；平台接受必须有真实回执。阶段复核只写结论、证据、反证、下一步，不要求展示内部思维。"
 		prompt += "\n\n交付前调用 report_outcome：明确验收条件、目标状态（unverified/partial/blocked/verified）、结论、证据编号及产物相对路径。verified 必须说明实际验证方法并引用成功工具证据；候选 flag 或只有推断时只能用 partial/unverified。引用子任务证据时携带真实 conversation_id。运行正常结束不代表目标已达成。"
 	}
 	return prompt + chatWorkDirSpec(workDir)
@@ -165,6 +167,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		base = defaultToolsExcept("Sleep")
 	}
 	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID})
+	base = hostTools(base, c.proxyAddr, c.proxyCACert)
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
 	if c.extraToolsFn != nil {
@@ -173,7 +176,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 
 	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir)+responseLanguageBlock(ctx), def)
 	opts := agentcore.Options{
-		Provider:               budgetProvider(ctx, c.prov),
+		Provider:               budgetProvider(ctx, meterProvider(ctx, c.prov)),
 		SystemPrompt:           system,
 		DynamicBoundary:        boundary,
 		Tools:                  tools,
@@ -181,7 +184,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		UnlockSet:              def.Unlock,
 		PermissionMode:         permission.ModeBypass,
 		DisableBackgroundTasks: agentKey == "personal" || ctf,
-		EnableWebFetch:         true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
+		EnableWebFetch:         false, // Host adapter records redirects and bounded response evidence.
 		WebFetchProxy:          c.proxyAddr,
 		WebFetchCACert:         c.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
@@ -194,7 +197,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		DeepSeekSearchAPIKey:  ws.DeepSeekAPIKey,
 		DeepSeekSearchModel:   ws.DeepSeekModel,
 		WebSearchProxy:        ws.Proxy,
-		BashEnv:               proxyEnv(c.proxyAddr, c.proxyCACert), // Bash 子命令默认走代理+信任 CA
+		BashEnv:               hostHTTPEnv(c.proxyAddr, c.proxyCACert), // Same explicit route/CA as WebFetch.
 		WorkingDir:            sessionWorkDir,
 		MaxTurns:              maxTurns,
 		MaxDuration:           maxDuration,
@@ -245,11 +248,17 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// re-unlock skill-gated MCPs from prior Skill() calls in the reloaded history so
 	// revealed tools stay callable across the fresh session.
 	seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
-	text, _, err := captureRunSession(ctx, s, message, func(r db.Activity) {
+	text, reason, err := captureRunSession(ctx, s, message, func(r db.Activity) {
 		if emit != nil {
 			r.Worker = agentKey
 			emit(r)
 		}
 	})
+	if observer, ok := ctx.Value(modelObserverKey{}).(*ModelObserver); ok && observer.Terminal != nil {
+		observer.Terminal(reason)
+	}
+	if err == nil && reason != "completed" {
+		err = fmt.Errorf("执行结束：%s", reason)
+	}
 	return text, err
 }

@@ -56,6 +56,7 @@ func (s *Server) initCTFExecution() error {
 		`CREATE TABLE IF NOT EXISTS conversation_executions (conversation_id BIGINT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, root_id BIGINT NOT NULL, state TEXT NOT NULL, started_ms BIGINT NOT NULL, finished_ms BIGINT NOT NULL DEFAULT 0, model_calls BIGINT NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS conversation_outcomes (conversation_id BIGINT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, report_json TEXT NOT NULL)`,
 		`UPDATE conversation_executions SET state='interrupted', finished_ms=CAST(strftime('%s','now') AS INTEGER)*1000 WHERE state='running'`,
+		`UPDATE conversation_turns SET state='interrupted',reason='service_restart',finished_ms=CAST(strftime('%s','now') AS INTEGER)*1000 WHERE state='running'`,
 	} {
 		if _, err := s.m.pg.Exec(statement); err != nil {
 			return err
@@ -364,7 +365,7 @@ func (s *Server) startCTFChild(ctx context.Context, parent *db.Conversation, key
 		defer timeoutCancel()
 		defer stop(nil)
 		ca = ca.WithExtraTools(s.conversationTools(child)).WithCompletionCheck(func() string { return w.completionCheck(child.ID) })
-		result, callErr := ca.Chat(childCtx, key, busyKey, childTask, a.MaxTurns, budget, a.WebSearch, func(rec db.Activity) { _, _ = s.m.pg.AppendConvActivity(child.ID, rec) })
+		result, callErr := s.runMeteredChat(childCtx, ca, child, busyKey, childTask, a.MaxTurns, budget, a.WebSearch, func(rec db.Activity) { _, _ = s.m.pg.AppendConvActivity(child.ID, rec) })
 		// Drain descendants before releasing the conversation's busy slot.
 		stop(agent.AbortChatTurnFinished)
 		w.mu.Lock()

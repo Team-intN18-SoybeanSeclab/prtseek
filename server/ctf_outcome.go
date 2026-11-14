@@ -24,12 +24,17 @@ type ctfEvidenceRef struct {
 const ctfTreeQuery = `WITH RECURSIVE tree(id) AS (SELECT $1 UNION SELECT d.child_id FROM conversation_delegations d JOIN tree ON d.parent_id=tree.id)`
 
 type ctfOutcome struct {
-	State        string           `json:"state"`
-	Summary      string           `json:"summary,omitempty"`
-	Criterion    string           `json:"criterion,omitempty"`
-	Verification string           `json:"verification,omitempty"`
-	Evidence     []ctfEvidenceRef `json:"evidence,omitempty"`
-	Artifacts    []string         `json:"artifacts,omitempty"`
+	State              string           `json:"state"`
+	Summary            string           `json:"summary,omitempty"`
+	Criterion          string           `json:"criterion,omitempty"`
+	Verification       string           `json:"verification,omitempty"`
+	Evidence           []ctfEvidenceRef `json:"evidence,omitempty"`
+	Artifacts          []string         `json:"artifacts,omitempty"`
+	VerificationLevel  string           `json:"verification_level,omitempty"`
+	ExperimentID       string           `json:"experiment_id,omitempty"`
+	BaselineEvidence   *ctfEvidenceRef  `json:"baseline_evidence,omitempty"`
+	ResultEvidence     *ctfEvidenceRef  `json:"result_evidence,omitempty"`
+	AcceptanceEvidence *ctfEvidenceRef  `json:"acceptance_evidence,omitempty"`
 }
 
 func (s *Server) readCTFOutcome(id int64) ctfOutcome {
@@ -63,8 +68,11 @@ func (s *Server) ctfOutcomeTool(c *db.Conversation) actool.CoreTool {
 	return wrTool("report_outcome", "记录本次目标状态，与运行是否结束独立。verified 表示 Agent 已按 criterion 实际验证，须填写 verification 并引用可回查成功工具证据；文件存在和候选 flag 都不足以证明成功。", objSchema(map[string]any{
 		"state":   map[string]any{"type": "string", "enum": []string{"unverified", "partial", "blocked", "verified"}},
 		"summary": strParam("结论或实际阻塞点"), "criterion": strParam("本子任务可验证的验收条件"), "verification": strParam("实际验证方式和观测结果；不得把推断写成验证"),
-		"evidence":  map[string]any{"type": "array", "maxItems": 16, "items": ref},
-		"artifacts": map[string]any{"type": "array", "maxItems": 16, "items": map[string]any{"type": "string"}, "description": "自己工作目录中实际产物的相对路径"},
+		"evidence":           map[string]any{"type": "array", "maxItems": 16, "items": ref},
+		"artifacts":          map[string]any{"type": "array", "maxItems": 16, "items": map[string]any{"type": "string"}, "description": "自己工作目录中实际产物的相对路径"},
+		"verification_level": map[string]any{"type": "string", "enum": []string{"inference", "observed", "reproduced", "accepted"}, "description": "推断/实际观察/隔离实验独立复现/平台接受。这是Agent报告的证据等级，不是自动语义判题。"},
+		"experiment_id":      strParam("独立复现须使用 research_experiment 分配的真实编号，说明初始状态与唯一产物"),
+		"baseline_evidence":  ref, "result_evidence": ref, "acceptance_evidence": ref,
 	}, "state", "summary", "criterion"), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 		if ctx.Err() != nil {
 			return actool.Errorf("run cancelled"), nil
@@ -85,6 +93,23 @@ func (s *Server) ctfOutcomeTool(c *db.Conversation) actool.CoreTool {
 }
 
 func (s *Server) validateCTFOutcome(id int64, o *ctfOutcome) error {
+	if o.VerificationLevel == "" {
+		o.VerificationLevel = "inference"
+		if o.State == "verified" {
+			o.VerificationLevel = "observed"
+		}
+	}
+	switch o.VerificationLevel {
+	case "inference", "observed", "reproduced", "accepted":
+	default:
+		return fmt.Errorf("invalid verification_level")
+	}
+	if o.State == "verified" && o.VerificationLevel == "inference" {
+		return fmt.Errorf("仅推断不能标记 verified")
+	}
+	if o.VerificationLevel != "inference" && (len(o.Evidence) == 0 || strings.TrimSpace(o.Verification) == "") {
+		return fmt.Errorf("观察或更高等级需要验证说明与工具证据")
+	}
 	switch o.State {
 	case "unverified", "partial", "blocked", "verified":
 	default:
@@ -156,6 +181,11 @@ func (s *Server) validateCTFOutcome(id int64, o *ctfOutcome) error {
 	if o.State == "verified" && !success {
 		return fmt.Errorf("verified 需要成功的实际工具观察，不能只引用派发或报告")
 	}
+	if o.VerificationLevel == "reproduced" || o.VerificationLevel == "accepted" {
+		if err := s.validateVerificationLevel(id, o); err != nil {
+			return err
+		}
+	}
 	for _, path := range o.Artifacts {
 		if !filepath.IsLocal(path) || strings.Contains(path, "\\") {
 			return fmt.Errorf("产物必须使用工作目录内的相对路径")
@@ -173,5 +203,96 @@ func (s *Server) validateCTFOutcome(id int64, o *ctfOutcome) error {
 	o.Summary = agent.RedactResearchText(o.Summary)
 	o.Criterion = agent.RedactResearchText(o.Criterion)
 	o.Verification = agent.RedactResearchText(o.Verification)
+	return nil
+}
+
+// Validate evidence identity, chronology and experiment isolation. The report
+// remains the agent's claim: byte integrity does not establish its semantics.
+func (s *Server) validateVerificationLevel(id int64, o *ctfOutcome) error {
+	refs := []*ctfEvidenceRef{o.AcceptanceEvidence}
+	if o.VerificationLevel == "reproduced" {
+		refs = []*ctfEvidenceRef{o.BaselineEvidence, o.ResultEvidence}
+	}
+	for _, ref := range refs {
+		if ref == nil || ref.ID == "" {
+			return fmt.Errorf("独立复现需要 baseline_evidence/result_evidence；平台接受需要 acceptance_evidence")
+		}
+		if ref.ConversationID == 0 {
+			ref.ConversationID = id
+		}
+		found := false
+		for _, e := range o.Evidence {
+			cid := e.ConversationID
+			if cid == 0 {
+				cid = id
+			}
+			if cid == ref.ConversationID && e.ID == ref.ID {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("分级验证证据必须同时列入 evidence")
+		}
+		memory, err := agent.NewResearchMemory(s.conversationWorkDir(ref.ConversationID))
+		if err != nil {
+			return err
+		}
+		state, err := memory.Snapshot()
+		if err != nil {
+			return err
+		}
+		success := false
+		for _, obs := range state.Observations {
+			if obs.ID == ref.ID && !obs.IsError && !strings.HasPrefix(obs.Tool, "research_") && obs.Tool != "report_outcome" && !strings.HasPrefix(obs.Tool, "delegate_") && obs.Tool != "wait_agents" && obs.Tool != "cancel_agent" {
+				success = true
+			}
+		}
+		if !success {
+			return fmt.Errorf("分级验证必须引用实际成功工具观察")
+		}
+	}
+	if o.VerificationLevel == "reproduced" {
+		if o.BaselineEvidence.ConversationID != id || o.ResultEvidence.ConversationID != id || o.BaselineEvidence.ID == o.ResultEvidence.ID {
+			return fmt.Errorf("独立复现需要本会话两次不同的基线与结果观察")
+		}
+		memory, err := agent.NewResearchMemory(s.conversationWorkDir(id))
+		if err != nil {
+			return err
+		}
+		state, err := memory.Snapshot()
+		if err != nil {
+			return err
+		}
+		baseline, result := -1, -1
+		for i, obs := range state.Observations {
+			if obs.ID == o.BaselineEvidence.ID {
+				baseline = i
+			}
+			if obs.ID == o.ResultEvidence.ID {
+				result = i
+			}
+		}
+		if baseline < 0 || result <= baseline {
+			return fmt.Errorf("基线观察必须先于结果验证")
+		}
+		found := false
+		for _, entry := range state.Entries {
+			if entry.Scope == o.ExperimentID && strings.HasPrefix(o.ExperimentID, "exp-") {
+				found = true
+			}
+		}
+		if !found || strings.ContainsAny(o.ExperimentID, "/\\.") {
+			return fmt.Errorf("独立复现需要 research_experiment 创建的实验编号")
+		}
+		root, err := os.OpenRoot(s.conversationWorkDir(id))
+		if err != nil {
+			return err
+		}
+		defer root.Close()
+		info, err := root.Stat(filepath.Join(".research", "experiments", o.ExperimentID))
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("隔离实验目录不可用")
+		}
+	}
 	return nil
 }

@@ -65,6 +65,9 @@ type researchRuntime struct {
 	stopChecked   bool
 	readOnly      bool
 	researchTask  bool
+	recent        []researchProgressObservation
+	stageSteps    int
+	lastReview    int
 }
 
 // Method-card selection is intentionally narrow. Evidence collection and
@@ -123,6 +126,9 @@ func AttachResearchRuntime(ctx context.Context, opts *agentcore.Options, model, 
 		opts.Tools = personalTools(ctx, "", opts.Tools)
 	}
 	opts.Tools = append(append([]actool.CoreTool{}, opts.Tools...), memory.Tools(ro)...)
+	if !ro && relevant {
+		opts.Tools = append(opts.Tools, researchExperimentTool(memory))
+	}
 	if !ro && guideEnabled {
 		opts.Tools = append(opts.Tools, ResearchGuideTool(opts.Tools))
 	}
@@ -225,6 +231,9 @@ func (r *researchRuntime) observe(ctx context.Context, name string, input []byte
 	}
 	if !researchPollingTool(name) && (a.failures >= 2 || a.repeats >= 3) {
 		note += "停滞提示：相同参数未带来新的观察。先归纳失败原因与反证，再选择能区分假设的下一步；成功返回不等于任务已完成。"
+	}
+	if r.researchTask && !researchPollingTool(name) {
+		note += r.observeProgress(ctx, name, result, id, isError)
 	}
 	return id, note
 }

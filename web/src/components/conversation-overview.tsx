@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
-import { elapsedLabel, executionLabel, outcomeLabel } from "@/lib/ctf-status";
+import { elapsedLabel, executionLabel, outcomeLabel, endReasonLabel, verificationLevelLabel } from "@/lib/ctf-status";
 import { hideResearchEvidenceAnnotation } from "@/lib/research-evidence";
 import { type ConversationFile, type ConversationOverview as Overview, workflowsApi } from "@/lib/workflows-api";
 
@@ -42,6 +42,8 @@ export function ConversationOverview({ id, overview }: { id: number; overview: O
         <span className={overview.outcome.state === "blocked" ? "text-amber-600 dark:text-amber-400" : "text-foreground"}>目标：{outcomeLabel(overview.outcome.state)}</span>
         <span>本轮 {elapsedLabel(overview.elapsed_ms)}</span>
         <span title="包含所有子会话；按接口报告的用量累计">累计 Token {(overview.input_tokens + overview.output_tokens).toLocaleString()}</span>
+        {!!overview.cache_read_tokens && <span title="接口报告的缓存读取量，单独展示">缓存读取 {overview.cache_read_tokens.toLocaleString()}</span>}
+        {overview.end_reason && <span title={`运行编号 ${overview.turn_id ?? "—"}`}>结束原因：{endReasonLabel(overview.end_reason)}</span>}
         <span title="本轮与子任务共享的逻辑模型请求预算；底层网络重试另计">调用 {overview.model_calls}/{overview.model_call_limit}</span>
         {overview.active_children > 0 && <span>{overview.active_children} 个子任务执行中</span>}
       </>}
@@ -52,6 +54,7 @@ export function ConversationOverview({ id, overview }: { id: number; overview: O
       <summary className="cursor-pointer text-foreground">目标报告：{overview.outcome.summary}</summary>
       <div className="space-y-1 py-2 whitespace-pre-wrap break-words">
         <p>验收条件：{overview.outcome.criterion}</p>
+        {overview.outcome.verification_level && <p>验证等级：{verificationLevelLabel(overview.outcome.verification_level)} · Agent 报告</p>}
         {overview.outcome.verification && <p>验证记录：{overview.outcome.verification}</p>}
         {!!overview.outcome.evidence?.length && <p>证据：{overview.outcome.evidence.map((e) => `#${e.conversation_id}/${e.id}`).join("、")}</p>}
       </div>

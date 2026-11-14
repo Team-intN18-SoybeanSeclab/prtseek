@@ -16,6 +16,7 @@ interface CTFOutcome {
   summary?: string;
   criterion?: string;
   verification?: string;
+  verification_level?: "inference" | "observed" | "reproduced" | "accepted";
   evidence?: { conversation_id: number; id: string }[];
   artifacts?: string[];
 }
@@ -29,6 +30,10 @@ export interface ConversationOverview {
   model_call_limit: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  turn_id?: number;
+  end_reason?: string;
   active_children: number;
   latest?: DelegationActivity;
   outcome: CTFOutcome;
