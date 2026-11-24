@@ -243,7 +243,7 @@ export function ModelEditor({
             <div className="space-y-1"><Label htmlFor="model-context">上下文容量（K Token）</Label><Input id="model-context" type="number" min={0} value={advanced.context_window_k} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, context_window_k: Math.max(0, Number(e.target.value)) })} /></div>
             <div className="space-y-1"><Label htmlFor="model-output">输出上限（Token）</Label><Input id="model-output" type="number" min={0} value={advanced.max_tokens} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, max_tokens: Math.max(0, Number(e.target.value)) })} /></div>
           </div>
-          <p className="text-xs text-muted-foreground">容量 0 使用应用默认值；输出上限 0 使用接口默认值。</p>
+          <p className="text-xs text-muted-foreground">容量填 0 使用模型的默认工作窗口。接口支持 100 万 Token 时可填 1000。输出上限单独设置，填 0 使用接口默认值。</p>
           <div className="space-y-1"><Label htmlFor="model-output-field">输出上限字段</Label><NativeSelect id="model-output-field" value={advanced.max_tokens_field} disabled={!!busy} onChange={(e) => setAdvanced({ ...advanced, max_tokens_field: e.target.value })}><option value="">max_tokens（默认）</option><option value="max_completion_tokens">max_completion_tokens</option></NativeSelect></div>
         </div>
       </details>
@@ -336,6 +336,7 @@ export function ModelSettings() {
                 </div>
                 <p className="mt-1 break-all text-sm text-muted-foreground">
                   {p.model} · {p.format}
+                  {p.working_window_tokens != null && ` · 压缩工作窗口 ${p.working_window_tokens.toLocaleString()} Token`}
                 </p>
               </div>
               <div className="flex items-center gap-1">

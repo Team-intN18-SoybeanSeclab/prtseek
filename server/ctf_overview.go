@@ -122,6 +122,9 @@ func (s *Server) conversationFiles(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			walk := func(path string, d fs.DirEntry, walkErr error) error {
+				if strings.HasPrefix(path, ".turn-archive-") {
+					return nil
+				}
 				visited++
 				if visited > 2000 || len(files) >= 300 {
 					truncated = true

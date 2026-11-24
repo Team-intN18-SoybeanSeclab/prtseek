@@ -2,6 +2,8 @@
 
 以deepseek系列模型驱动的CTF Agent。
 
+![prtseek 终端登录界面](./docs/images/prtseek-login.png)
+
 本项目基于 [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX) 二次开发，原始项目来自 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)。保留 Go 模块路径 `github.com/Autumn-27/artex` 和 AGPL-3.0 许可证。
 
 ## 项目改进
@@ -80,6 +82,8 @@ Agent 管理仅展示四个默认 CTF Agent；每个角色可调整提示词、�
 整轮主任务和子任务默认仍共享 200 次逻辑模型请求（包括压缩），不是无限运行。长任务可在启动前设置 `prtseek_CTF_MODEL_CALL_LIMIT=2000`（范围 1–100000），会话概览显示实际限制；Windows PowerShell 使用 `$env:prtseek_CTF_MODEL_CALL_LIMIT='2000'` 后在同一终端运行更新入口，Docker 在 `.env` 配置。时间、轮次、调用预算、用户停止及真实外部阻塞中最先到达者生效。数小时续研已覆盖模拟时钟与协议回归，不代表完成真实数小时解题或保证拿到 flag。
 
 ## 更新日志
+
+**2.0.1（2026-11-24）** 支持在会话文件中下载长会话归档，模型设置页可查看压缩使用的实际上下文窗口。
 
 每次更新记录实际优化、修复和验证范围，完整历史见 [CHANGELOG.md](CHANGELOG.md)。
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ func (s *Server) runMeteredChat(ctx context.Context, ca *agent.ChatAgent, c *db.
 	if w, ok := ctx.Value(ctfWorkflowKey{}).(*ctfWorkflowRun); ok {
 		root = w.rootID
 	}
+	started := time.Now()
 	id, err := s.m.pg.StartConversationTurn(c.ID, root)
 	if err != nil {
 		return "", err
@@ -67,6 +69,15 @@ func (s *Server) runMeteredChat(ctx context.Context, ca *agent.ChatAgent, c *db.
 		}
 		_, err := s.m.pg.Exec(`UPDATE conversation_turns SET state=$2,reason=$3,finished_ms=$4 WHERE id=$1`, id, state, reason, time.Now().UnixMilli())
 		runErr = errors.Join(runErr, err)
+		if err == nil && (time.Since(started) >= 4*time.Hour || state == "timed_out") {
+			name, archiveErr := s.archiveConversationTurn(c.ID, id)
+			activity := db.Activity{Worker: c.AgentKey, Kind: "text", Summary: "本轮已留档：" + name}
+			if archiveErr != nil {
+				activity.IsError = true
+				activity.Summary = fmt.Sprintf("本轮留档失败：%v", archiveErr)
+			}
+			emit(activity)
+		}
 	}()
 	return ca.Chat(ctx, c.AgentKey, session, message, turns, duration, search, emit)
 }
