@@ -81,6 +81,11 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 404, "会话不存在")
 			return
 		}
+		if err := s.beginConversationFileOperation(conversationID); err != nil {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		defer s.endConversationFileOperation(conversationID)
 		id = s.convBusyKey(conversationID)
 	}
 	if taskScoped {

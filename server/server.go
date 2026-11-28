@@ -69,8 +69,10 @@ type Server struct {
 	// immediately, so a page reload / proxy timeout can't abort a live run. This
 	// map serializes turns per task — one main-agent run at a time per task, so
 	// concurrent messages don't corrupt the shared exp<id>-main transcript.
-	chatMu   sync.Mutex
-	chatBusy map[string]bool
+	chatMu               sync.Mutex
+	chatBusy             map[string]bool
+	conversationFileOps  map[int64]int
+	conversationDeleting map[int64]bool
 	// chatCancel holds the cancel func for each in-flight conversation run (keyed by
 	// convBusyKey), so a manual stop can abort JUST that session's agent run. Set/
 	// cleared alongside chatBusy under chatMu. Aborting a run does NOT touch the P3

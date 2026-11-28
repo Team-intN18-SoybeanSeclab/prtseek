@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import styles from "@/components/chat-workspace.module.css";
 import { ConversationList } from "@/components/conversation-list";
+import { ContestPicker } from "@/components/contest-picker";
 import { ConversationOverview } from "@/components/conversation-overview";
 import { ReasoningControl } from "@/components/reasoning-control";
 import { Transcript } from "@/components/transcript";
@@ -110,6 +111,11 @@ function Composer({
             >
               <Paperclip />
             </Button>
+            <ContestPicker disabled={disabled} onPick={item => {
+              const statement = [item.title, item.description].filter(Boolean).join("\n\n");
+              onChange([value.trimEnd(), statement].filter(Boolean).join("\n\n"));
+              appendFiles(item.files);
+            }} />
           </>
         )}
         <textarea

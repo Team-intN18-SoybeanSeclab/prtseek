@@ -287,6 +287,11 @@ func (s *Server) personalCreateBackground(w http.ResponseWriter, r *http.Request
 	key := s.convBusyKey(c.ID)
 	controlKey := "background-control-" + strconv.FormatInt(c.ID, 10)
 	s.chatMu.Lock()
+	if s.conversationDeleting[c.ID] {
+		s.chatMu.Unlock()
+		writeErr(w, 409, "会话正在删除")
+		return
+	}
 	if s.chatBusy[key] || s.chatBusy[controlKey] {
 		s.chatMu.Unlock()
 		writeErr(w, 409, "当前轮仍在执行，请等待本轮结束后再转后台")

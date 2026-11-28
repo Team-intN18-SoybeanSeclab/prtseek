@@ -15,7 +15,6 @@ import (
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/sidequestion"
 )
 
 const (
@@ -308,9 +307,7 @@ func (s *Server) pgDeleteConversation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "此会话关联后台执行记录，请保留会话以便回查结果")
 		return
 	}
-	s.cancelConversation(c.ID)
-	s.cancelSideWhere(func(p sidequestion.Parent) bool { return p.ConversationID == c.ID })
-	if err := pg.DeleteConversation(c.ID); err != nil {
+	if err := s.deleteConversationWithFiles(r.Context(), c.ID); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
@@ -335,9 +332,8 @@ func (s *Server) cancelConversation(id int64) {
 	}
 }
 
-// pgDeleteConversationsBatch deletes up to 100 selected conversations in one
-// database statement. Missing ids are reported per item so a stale list does not
-// hide what was actually removed.
+// pgDeleteConversationsBatch drains and cleans each selected conversation.
+// Per-item errors leave failed records visible and do not hide partial success.
 func (s *Server) pgDeleteConversationsBatch(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
@@ -375,25 +371,12 @@ func (s *Server) pgDeleteConversationsBatch(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	for _, id := range ids {
-		s.cancelConversation(id)
-		s.cancelSideWhere(func(p sidequestion.Parent) bool { return p.ConversationID == id })
-	}
-	deleted, err := pg.DeleteConversations(ids)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	deletedSet := make(map[int64]struct{}, len(deleted))
-	for _, id := range deleted {
-		deletedSet[id] = struct{}{}
-	}
 	items := make([]conversationDeleteItem, 0, len(ids))
 	for _, id := range ids {
-		_, ok := deletedSet[id]
-		item := conversationDeleteItem{ID: id, OK: ok}
-		if !ok {
-			item.Error = "conversation not found"
+		err := s.deleteConversationWithFiles(r.Context(), id)
+		item := conversationDeleteItem{ID: id, OK: err == nil}
+		if err != nil {
+			item.Error = err.Error()
 		}
 		items = append(items, item)
 	}
@@ -492,6 +475,11 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	if err := s.beginConversationFileOperation(c.ID); err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	defer s.endConversationFileOperation(c.ID)
 	a, err := pg.GetAgentByKey(c.AgentKey)
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -593,6 +581,11 @@ func (s *Server) reserveConversationTurn(ctx context.Context, busyKey string, in
 	}
 	for {
 		s.chatMu.Lock()
+		id, _ := strconv.ParseInt(strings.TrimPrefix(busyKey, "conv-"), 10, 64)
+		if s.conversationDeleting[id] {
+			s.chatMu.Unlock()
+			return errors.New("会话正在删除")
+		}
 		if !s.chatBusy[busyKey] {
 			s.chatBusy[busyKey] = true
 			s.chatMu.Unlock()
@@ -1042,6 +1035,10 @@ func (s *Server) runTriggeredRun(item triggeredRun) {
 		log.Printf("[trigger] create conversation for %s failed: %v", item.agentKey, err)
 		return
 	}
+	if err := s.beginConversationFileOperation(c.ID); err != nil {
+		return
+	}
+	defer s.endConversationFileOperation(c.ID)
 	msg := finalTriggerMessage(item) // prepend the task-context header for single (non-merged) fires
 	if _, err := pg.AppendConvActivity(c.ID, db.Activity{Worker: item.agentKey, Kind: "user", Summary: firstLine(msg, 200), Detail: msg}); err != nil {
 		log.Printf("[trigger] append msg failed: %v", err)

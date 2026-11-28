@@ -38,7 +38,7 @@ export function ConversationList({
     if (
       kind === "delete" &&
       !window.confirm(
-        `删除会话「${item.title || "未命名会话"}」及其历史记录？${item.running ? "该会话正在运行，删除也会停止运行。" : ""}`,
+        `永久删除会话「${item.title || "未命名会话"}」？会话记录、附件和工作区中的所有文件都会删除，无法恢复。${item.running ? "该会话正在运行，删除也会停止运行。" : ""}`,
       )
     )
       return;

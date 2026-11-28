@@ -361,6 +361,20 @@ func (s *Server) registerSideRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) handleSideQuestions(w http.ResponseWriter, r *http.Request, p sidequestion.Parent) {
+	conversationID := p.ConversationID
+	if conversationID == 0 && p.ApprovalID > 0 {
+		if err := s.m.pg.QueryRowContext(r.Context(), `SELECT COALESCE(conversation_id,0) FROM intercept_pending WHERE id=$1`, p.ApprovalID).Scan(&conversationID); err != nil {
+			writeErr(w, 404, "审批记录不存在")
+			return
+		}
+	}
+	if conversationID > 0 {
+		if err := s.beginConversationFileOperation(conversationID); err != nil {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		defer s.endConversationFileOperation(conversationID)
+	}
 	key := p.Key()
 	if r.Method == "DELETE" {
 		s.side.commands.Lock()

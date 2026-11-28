@@ -126,6 +126,11 @@ func (s *Server) startFindingRetest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
+		if err := s.beginConversationFileOperation(conv.ID); err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		defer s.endConversationFileOperation(conv.ID)
 		busyKey := s.convBusyKey(conv.ID)
 		s.chatMu.Lock()
 		s.chatBusy[busyKey] = true

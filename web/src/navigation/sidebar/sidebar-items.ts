@@ -1,4 +1,4 @@
-import { Bot, FolderOpen, type LucideIcon, Network, Settings2, Sparkles, Wrench } from "lucide-react";
+import { Bot, Download, FolderOpen, type LucideIcon, Network, Settings2, Sparkles, Wrench } from "lucide-react";
 
 type NavBadge = "new" | "soon";
 
@@ -43,6 +43,7 @@ export const sidebarItems: NavGroup[] = [
     id: 1,
     items: [
       { id: "chat", title: "对话与会话", url: "/chat", icon: Bot },
+      { id: "contest-import", title: "一键拉题", url: "/contest-import", icon: Download },
       { id: "agents", title: "Agents 管理", url: "/system/agents", icon: Bot },
       { id: "llm", title: "LLM 管理", url: "/system/llm", icon: Network },
       { id: "tools", title: "工具管理", url: "/system/tools", icon: Wrench },

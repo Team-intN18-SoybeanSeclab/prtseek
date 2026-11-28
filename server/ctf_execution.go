@@ -331,6 +331,10 @@ func (s *Server) startCTFChild(ctx context.Context, parent *db.Conversation, key
 	if err != nil {
 		return nil, err
 	}
+	if err := s.beginConversationFileOperation(child.ID); err != nil {
+		return nil, err
+	}
+	defer s.endConversationFileOperation(child.ID)
 	defer func() {
 		if !started {
 			_, _ = s.m.pg.Exec(`UPDATE conversation_delegations SET state='failed' WHERE child_id=$1`, child.ID)
